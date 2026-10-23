@@ -1,0 +1,60 @@
+name: CI Build & Protocol Verification
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  macos-build-and-test:
+    name: macOS Build & Protocol Test Suite
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "5.10"
+
+      - name: Build macOS Protocol Library & CLI
+        run: |
+          cd apps/macos
+          swift build --target ContinuityCLI
+          swift build --target ContinuityCompanion
+
+      - name: Execute Protocol Test Suite
+        run: |
+          cd apps/macos
+          swift run ContinuityCLI test
+
+  integration-tests:
+    name: End-to-End Handshake & Transfer Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Integration Tests
+        run: |
+          python3 tests/integration/run_e2e_test.py
+
+  android-lint-check:
+    name: Android Project Structure Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Validate Protocol Schemas
+        run: |
+          test -f shared/protocol/schemas/continuity_protocol.proto
+          test -f apps/android/app/src/main/AndroidManifest.xml
+          test -f apps/android/app/build.gradle.kts

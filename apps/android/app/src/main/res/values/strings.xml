@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Continuity</string>
+    <string name="channel_connection_name">Connection Status</string>
+    <string name="channel_connection_desc">Shows ongoing continuity link with your Mac</string>
+    <string name="channel_transfers_name">File Transfers</string>
+    <string name="channel_transfers_desc">Progress of files transferring to or from Mac</string>
+</resources>

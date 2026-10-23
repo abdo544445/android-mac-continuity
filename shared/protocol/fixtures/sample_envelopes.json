@@ -1,0 +1,57 @@
+{
+  "test_cases": [
+    {
+      "name": "PairRequest_Valid",
+      "envelope": {
+        "version": 1,
+        "request_id": "550e8400-e29b-41d4-a716-446655440000",
+        "timestamp_ms": 1792789200000,
+        "sender_device_id": "pixel-9-pro-001",
+        "pair_request": {
+          "device_id": "pixel-9-pro-001",
+          "device_name": "Alex's Pixel 9 Pro",
+          "platform": 2,
+          "edition": 0,
+          "pairing_pin": "849201"
+        }
+      }
+    },
+    {
+      "name": "TransferOffer_Valid",
+      "envelope": {
+        "version": 1,
+        "request_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+        "timestamp_ms": 1792789205000,
+        "sender_device_id": "macbook-pro-m3-001",
+        "session_token": "tok_sess_892716381920",
+        "transfer_offer": {
+          "transfer_id": "tx_20261023_001",
+          "file_name": "presentation_notes.pdf",
+          "file_size_bytes": 1048576,
+          "mime_type": "application/pdf",
+          "sha256_checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "total_chunks": 2,
+          "chunk_size_bytes": 524288
+        }
+      }
+    },
+    {
+      "name": "DeviceStatus_Valid",
+      "envelope": {
+        "version": 1,
+        "request_id": "7ca8b820-9dad-11d1-80b4-00c04fd430c9",
+        "timestamp_ms": 1792789210000,
+        "sender_device_id": "pixel-9-pro-001",
+        "session_token": "tok_sess_892716381920",
+        "device_status": {
+          "battery_percentage": 88,
+          "is_charging": true,
+          "is_wifi_connected": true,
+          "wifi_ssid": "Home-5G",
+          "free_storage_bytes": 68719476736,
+          "total_storage_bytes": 274877906944
+        }
+      }
+    }
+  ]
+}

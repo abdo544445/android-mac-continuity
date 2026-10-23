@@ -1,0 +1,330 @@
+syntax = "proto3";
+
+package continuity;
+
+option java_package = "com.continuity.ecosystem.protocol";
+option java_multiple_files = true;
+option swift_prefix = "Continuity";
+
+// Unified top-level envelope for all protocol communications
+message ContinuityEnvelope {
+  uint32 version = 1;                    // Protocol version (e.g. 1)
+  string request_id = 2;                 // Unique UUID for tracing request/response
+  int64 timestamp_ms = 3;                // Unix timestamp in milliseconds
+  string sender_device_id = 4;           // Canonical device identifier
+  string session_token = 5;              // Session authentication token after pairing
+  
+  oneof payload {
+    // 01: Pairing & Handshake
+    PairRequest pair_request = 10;
+    PairConfirm pair_confirm = 11;
+    PairStatus pair_status = 12;
+    DeviceHello device_hello = 13;
+    CapabilityList capabilities = 14;
+
+    // 02: Heartbeat & Health
+    Heartbeat heartbeat = 20;
+    DeviceStatus device_status = 21;
+
+    // 03: File Transfer
+    TransferOffer transfer_offer = 30;
+    TransferAccept transfer_accept = 31;
+    TransferReject transfer_reject = 32;
+    TransferChunk transfer_chunk = 33;
+    TransferComplete transfer_complete = 34;
+    TransferCancel transfer_cancel = 35;
+
+    // 04: Clipboard Sharing
+    ClipboardOffer clipboard_offer = 40;
+    ClipboardPayload clipboard_payload = 41;
+
+    // 05: Notifications
+    NotificationEvent notification_event = 50;
+    NotificationAction notification_action = 51;
+
+    // 06: Streaming Sessions (Screen / Camera / Control)
+    SessionRequest session_request = 60;
+    SessionStop session_stop = 61;
+    SessionState session_state = 62;
+    InputEvent input_event = 63;
+
+    // 07: Error & Status
+    ErrorResponse error_response = 99;
+  }
+}
+
+// -------------------------------------------------------------
+// 01: Pairing & Discovery
+// -------------------------------------------------------------
+
+enum DevicePlatform {
+  PLATFORM_UNSPECIFIED = 0;
+  PLATFORM_MACOS = 1;
+  PLATFORM_ANDROID = 2;
+}
+
+enum DeviceEdition {
+  EDITION_PUBLIC = 0;
+  EDITION_ADVANCED = 1;
+}
+
+message PairRequest {
+  string device_id = 1;                  // Unique permanent device ID
+  string device_name = 2;                // Human-readable device name (e.g., "Alex's MacBook Pro")
+  DevicePlatform platform = 3;           // macOS or Android
+  DeviceEdition edition = 4;             // Public or Advanced
+  bytes ephemeral_public_key = 5;        // X25519 / ECDH public key (32 bytes)
+  string pairing_pin = 6;                // Visual 6-digit verification code or QR token
+  bytes identity_signature = 7;          // Signature verifying device possession of identity key
+}
+
+message PairConfirm {
+  string device_id = 1;
+  string device_name = 2;
+  DevicePlatform platform = 3;
+  bytes ephemeral_public_key = 4;
+  bool approved = 5;
+  string assigned_session_token = 6;     // Generated session token
+  bytes auth_tag = 7;                    // Cryptographic MAC confirming shared key derivation
+}
+
+message PairStatus {
+  enum StatusCode {
+    STATUS_SUCCESS = 0;
+    STATUS_PENDING_USER_APPROVAL = 1;
+    STATUS_REJECTED = 2;
+    STATUS_PIN_MISMATCH = 3;
+    STATUS_TIMEOUT = 4;
+    STATUS_REVOKED = 5;
+  }
+  StatusCode code = 1;
+  string message = 2;
+}
+
+message DeviceHello {
+  uint32 protocol_version = 1;           // Supported protocol version
+  string app_version = 2;                // Application build version (e.g. "1.0.0")
+  string os_version = 3;                 // OS release string (e.g. "macOS 15.0", "Android 15")
+  string device_model = 4;               // Hardware model (e.g. "Pixel 9 Pro", "MacBookPro18,1")
+  int64 uptime_seconds = 5;
+}
+
+message CapabilityList {
+  bool supports_file_transfer = 1;
+  bool supports_clipboard = 2;
+  bool supports_notifications = 3;
+  bool supports_remote_replies = 4;
+  bool supports_screen_mirroring = 5;
+  bool supports_camera_streaming = 6;
+  bool supports_remote_control = 7;
+  bool supports_photo_backup = 8;
+  bool supports_advanced_scrcpy = 9;
+  uint64 max_chunk_size_bytes = 10;      // Negotiated file chunk size (e.g. 512 KB)
+  repeated string supported_video_codecs = 11; // e.g. ["H264", "H265", "AV1"]
+}
+
+// -------------------------------------------------------------
+// 02: Heartbeat & Health
+// -------------------------------------------------------------
+
+message Heartbeat {
+  int64 sequence_number = 1;
+  int64 timestamp_ms = 2;
+}
+
+message DeviceStatus {
+  int32 battery_percentage = 1;          // 0 - 100
+  bool is_charging = 2;
+  bool is_wifi_connected = 3;
+  string wifi_ssid = 4;
+  int64 free_storage_bytes = 5;
+  int64 total_storage_bytes = 6;
+  enum ThermalState {
+    THERMAL_NORMAL = 0;
+    THERMAL_FAIR = 1;
+    THERMAL_SERIOUS = 2;
+    THERMAL_CRITICAL = 3;
+  }
+  ThermalState thermal_state = 7;
+}
+
+// -------------------------------------------------------------
+// 03: File Transfer
+// -------------------------------------------------------------
+
+message TransferOffer {
+  string transfer_id = 1;                // Unique UUID for the transfer batch
+  string file_name = 2;                  // Name of file or archive
+  int64 file_size_bytes = 3;             // Total file size
+  string mime_type = 4;                  // Content type
+  string sha256_checksum = 5;            // Hex/base64 encoded SHA-256
+  int32 total_chunks = 6;                // Count of expected chunks
+  int64 chunk_size_bytes = 7;            // Size per chunk (e.g. 524288)
+  bool is_directory_bundle = 8;          // True if bundled folder
+}
+
+message TransferAccept {
+  string transfer_id = 1;
+  int32 resume_chunk_index = 2;          // Chunk offset for resumable transfers (0 if fresh)
+  string save_destination_hint = 3;      // Optional folder hint
+}
+
+message TransferReject {
+  string transfer_id = 1;
+  enum Reason {
+    REJECT_USER_DECLINED = 0;
+    REJECT_INSUFFICIENT_STORAGE = 1;
+    REJECT_UNSUPPORTED_TYPE = 2;
+    REJECT_RATE_LIMITED = 3;
+    REJECT_SECURITY_POLICY = 4;
+  }
+  Reason reason = 2;
+  string details = 3;
+}
+
+message TransferChunk {
+  string transfer_id = 1;
+  int32 chunk_index = 2;                 // Zero-based chunk sequence index
+  bytes data = 3;                        // Chunk binary payload
+  string chunk_sha256 = 4;               // Hash of this individual chunk
+}
+
+message TransferComplete {
+  string transfer_id = 1;
+  bool verified = 2;                     // True if total hash matched destination computation
+  string final_path_basename = 3;
+  int64 bytes_written = 4;
+}
+
+message TransferCancel {
+  string transfer_id = 1;
+  string reason = 2;
+}
+
+// -------------------------------------------------------------
+// 04: Clipboard Sharing
+// -------------------------------------------------------------
+
+message ClipboardOffer {
+  string clip_id = 1;
+  enum DataType {
+    CLIP_TEXT = 0;
+    CLIP_URL = 1;
+    CLIP_IMAGE_PNG = 2;
+    CLIP_HTML = 3;
+  }
+  DataType data_type = 2;
+  int64 content_length = 3;
+  bool is_sensitive = 4;                 // Marked sensitive (e.g. password manager copy)
+  string text_preview = 5;               // Redacted or brief preview
+}
+
+message ClipboardPayload {
+  string clip_id = 1;
+  bytes data = 2;                        // UTF-8 string or binary image
+  string mime_type = 3;
+}
+
+// -------------------------------------------------------------
+// 05: Notifications
+// -------------------------------------------------------------
+
+message NotificationEvent {
+  string notification_id = 1;            // Unique notification key
+  string package_name = 2;               // Originating Android package (e.g. "org.telegram.messenger")
+  string app_display_name = 3;           // e.g. "Telegram"
+  bytes app_icon_png = 4;                // Small PNG icon (optional)
+  string title = 5;                      // Notification title / Sender
+  string text = 6;                       // Notification body preview
+  int64 post_time_ms = 7;
+  bool is_clearable = 8;
+  bool has_reply_action = 9;             // True if RemoteInput reply is supported
+  repeated string available_actions = 10; // Action titles (e.g. ["Mark as read", "Archive"])
+}
+
+message NotificationAction {
+  string notification_id = 1;
+  string action_title = 2;
+  string reply_text = 3;                 // Text if this is a reply action
+}
+
+// -------------------------------------------------------------
+// 06: Streaming Sessions (Screen / Camera / Control)
+// -------------------------------------------------------------
+
+enum SessionType {
+  SESSION_UNKNOWN = 0;
+  SESSION_SCREEN_MIRROR = 1;
+  SESSION_CAMERA_STREAM = 2;
+  SESSION_REMOTE_INPUT = 3;
+}
+
+message SessionRequest {
+  string session_id = 1;
+  SessionType type = 2;
+  int32 width = 3;                       // Requested resolution width (e.g. 1920 or 1280)
+  int32 height = 4;                      // Requested resolution height (e.g. 1080 or 720)
+  int32 target_fps = 5;                  // e.g. 30 or 60
+  int32 target_bitrate_kbps = 6;         // e.g. 4000
+  string codec = 7;                      // "H264"
+  string camera_lens = 8;                // "BACK" or "FRONT" (for camera stream)
+}
+
+message SessionStop {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message SessionState {
+  string session_id = 1;
+  enum State {
+    STATE_IDLE = 0;
+    STATE_STARTING = 1;
+    STATE_ACTIVE = 2;
+    STATE_PAUSED = 3;
+    STATE_STOPPED = 4;
+    STATE_ERROR = 5;
+  }
+  State state = 2;
+  string error_message = 3;
+}
+
+message InputEvent {
+  string session_id = 1;
+  enum Action {
+    ACTION_DOWN = 0;
+    ACTION_UP = 1;
+    ACTION_MOVE = 2;
+    ACTION_KEY_DOWN = 3;
+    ACTION_KEY_UP = 4;
+    ACTION_NAV_BACK = 5;
+    ACTION_NAV_HOME = 6;
+    ACTION_NAV_RECENTS = 7;
+  }
+  Action action = 2;
+  float normalized_x = 3;                // Coordinate in 0.0 - 1.0 range
+  float normalized_y = 4;                // Coordinate in 0.0 - 1.0 range
+  int32 key_code = 5;                    // Android KeyEvent key code
+  string text_input = 6;                 // Direct UTF-8 text string
+}
+
+// -------------------------------------------------------------
+// 07: Error Response
+// -------------------------------------------------------------
+
+message ErrorResponse {
+  enum ErrorCode {
+    ERROR_UNKNOWN = 0;
+    ERROR_BAD_REQUEST = 1;
+    ERROR_UNAUTHORIZED = 2;
+    ERROR_FORBIDDEN = 3;
+    ERROR_NOT_FOUND = 4;
+    ERROR_SESSION_EXPIRED = 5;
+    ERROR_IO_FAILURE = 6;
+    ERROR_CHECKSUM_MISMATCH = 7;
+    ERROR_UNSUPPORTED_VERSION = 8;
+  }
+  ErrorCode code = 1;
+  string message = 2;
+  string original_request_id = 3;
+}

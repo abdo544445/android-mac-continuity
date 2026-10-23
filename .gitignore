@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+*.swp
+*.part
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Android / Gradle
+.gradle/
+build/
+app/build/
+*.apk
+*.aab
+local.properties
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/

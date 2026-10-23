@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "ContinuityCapabilityCatalog",
+  "version": "1.0.0",
+  "editions": {
+    "public": {
+      "name": "Public Edition",
+      "target_audience": "General consumers via Google Play & macOS Developer ID",
+      "requires_developer_mode": false,
+      "features": {
+        "device_pairing": {
+          "status": "supported",
+          "method": "QR code or manual 6-digit pin over local mDNS/TLS",
+          "requires_adb": false
+        },
+        "file_transfer": {
+          "status": "supported",
+          "method": "Storage Access Framework + chunked streaming with SHA-256 validation",
+          "requires_adb": false
+        },
+        "clipboard_sharing": {
+          "status": "supported_user_initiated",
+          "method": "Mac auto-send -> Android notification/Quick Settings; Android explicit share to Mac",
+          "requires_adb": false,
+          "note": "Android 10+ restricts background clipboard reading"
+        },
+        "notification_mirroring": {
+          "status": "supported",
+          "method": "Android NotificationListenerService with user-approved allowlist",
+          "requires_adb": false
+        },
+        "notification_replies": {
+          "status": "supported",
+          "method": "RemoteInput action mapping",
+          "requires_adb": false
+        },
+        "screen_mirroring": {
+          "status": "supported",
+          "method": "Android MediaProjection API with prominent user consent per session",
+          "requires_adb": false
+        },
+        "camera_as_webcam": {
+          "status": "supported",
+          "method": "CameraX H.264 stream to macOS CoreMediaIO virtual camera extension",
+          "requires_adb": false
+        },
+        "photo_backup": {
+          "status": "supported",
+          "method": "WorkManager background sync from MediaStore to Mac target directory",
+          "requires_adb": false
+        },
+        "remote_control": {
+          "status": "disabled",
+          "reason": "Accessibility-based full control restricted by Google Play policy"
+        }
+      }
+    },
+    "advanced": {
+      "name": "Advanced Personal Edition",
+      "target_audience": "Power users and self-hosted developers",
+      "requires_developer_mode": true,
+      "features": {
+        "all_public_features": true,
+        "scrcpy_mirroring": {
+          "status": "supported",
+          "method": "Bundled scrcpy server over ADB (USB or Wi-Fi TCP/IP)",
+          "latency": "< 35ms",
+          "resolution": "Up to native display resolution at 60fps"
+        },
+        "low_latency_input": {
+          "status": "supported",
+          "method": "Direct injection of keyboard and mouse events via ADB/scrcpy",
+          "requires_adb": true
+        },
+        "seamless_clipboard_sync": {
+          "status": "supported",
+          "method": "ADB pasteboard query and keyevent injection",
+          "requires_adb": true
+        },
+        "wireless_adb_pairing": {
+          "status": "supported",
+          "method": "Android 11+ pairing code over Wi-Fi"
+        },
+        "automation_bridge": {
+          "status": "supported",
+          "method": "Apple Shortcuts and intent invocation"
+        }
+      }
+    }
+  }
+}
