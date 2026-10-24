@@ -46,6 +46,22 @@ jobs:
         run: |
           python3 tests/integration/run_e2e_test.py
 
+  android-unit-tests:
+    name: Android Unit & Logic Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Android Test Suite
+        run: |
+          python3 tests/android/run_android_tests.py
+
   android-lint-check:
     name: Android Project Structure Check
     runs-on: ubuntu-latest

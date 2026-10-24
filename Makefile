@@ -1,6 +1,6 @@
-.PHONY: all build-macos test-macos test-e2e run-companion run-cli run-relay clean help
+.PHONY: all build-macos test-macos test-android test-e2e run-companion run-cli run-relay clean help
 
-all: build-macos test-macos test-e2e
+all: build-macos test-macos test-android test-e2e
 
 build-macos:
 	@echo "🔨 Building macOS Companion and CLI..."
@@ -10,6 +10,10 @@ build-macos:
 test-macos:
 	@echo "🧪 Running Swift Protocol Automated Tests..."
 	cd apps/macos && swift run ContinuityCLI test
+
+test-android:
+	@echo "🤖 Running Android Unit & Logic Test Suite..."
+	python3 tests/android/run_android_tests.py
 
 test-e2e:
 	@echo "🚀 Running End-to-End Integration Tests..."
