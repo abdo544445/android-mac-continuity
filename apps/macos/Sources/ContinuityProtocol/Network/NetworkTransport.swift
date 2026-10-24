@@ -14,6 +14,12 @@ public final class ContinuityNetworkSession: @unchecked Sendable {
     private let frameEncoder = FrameEncoder()
     private let frameDecoder = FrameDecoder()
     public weak var delegate: NetworkSessionDelegate?
+    private var strongDelegate: NetworkSessionDelegate?
+
+    public func setRetainedDelegate(_ delegate: NetworkSessionDelegate) {
+        self.strongDelegate = delegate
+        self.delegate = delegate
+    }
 
     public init(connection: NWConnection, id: String = UUID().uuidString) {
         self.id = id
@@ -30,8 +36,10 @@ public final class ContinuityNetworkSession: @unchecked Sendable {
                 self.receiveNext()
             case .failed(let error):
                 self.delegate?.sessionDidDisconnect(self, error: error)
+                self.strongDelegate = nil
             case .cancelled:
                 self.delegate?.sessionDidDisconnect(self, error: nil)
+                self.strongDelegate = nil
             default:
                 break
             }

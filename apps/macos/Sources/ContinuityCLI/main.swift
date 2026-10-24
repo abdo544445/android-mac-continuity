@@ -18,6 +18,11 @@ struct ContinuityCLI {
             print("🚀 Starting Simulated Android Node (Pixel 9 Pro)...")
             await runSimulatedAndroid(port: port)
 
+        case "listen":
+            let port = UInt16(args.dropFirst().first ?? "52400") ?? 52400
+            print("🎧 Starting Continuity Headless Host on port \(port)...")
+            await runHostListener(port: port)
+
         case "status":
             print("=== Continuity Ecosystem CLI ===")
             print("Local Host: \(Host.current().localizedName ?? "Mac")")
@@ -28,6 +33,8 @@ struct ContinuityCLI {
             print("""
             Continuity CLI - Developer & Test Harness
             Usage:
+              ContinuityCLI test                     - Run unit & protocol automated test suite
+              ContinuityCLI listen [port]            - Start headless host listener
               ContinuityCLI simulate-android [port]   - Run a simulated Android node to test handshake & file transfers
               ContinuityCLI status                   - Display local protocol status
             """)
@@ -126,7 +133,7 @@ struct ContinuityCLI {
 
         let session = ContinuityNetworkSession(connection: connection, id: "simulated-pixel-9")
         let simHandler = SimulatedAndroidHandler(session: session)
-        session.delegate = simHandler
+        session.setRetainedDelegate(simHandler)
 
         session.start()
 
@@ -138,6 +145,27 @@ struct ContinuityCLI {
 
         print("🏁 Simulation finished. Result: \(simHandler.isComplete ? "SUCCESS" : "INCOMPLETE")")
         session.stop()
+    }
+
+    static func runHostListener(port: UInt16) async {
+        do {
+            let listener = ContinuityNetworkListener(port: port)
+            let hostKeyPair = CryptoManager.shared.generateKeyPair()
+
+            listener.onNewSession = { session in
+                print("📱 [Host] Incoming connection accepted from peer!")
+                let hostHandler = HeadlessHostSessionHandler(session: session, keyPair: hostKeyPair)
+                session.setRetainedDelegate(hostHandler)
+            }
+
+            try listener.start()
+            print("📡 [Host] Waiting for connections on port \(port)... (Press Ctrl+C to stop)")
+            while true {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        } catch {
+            print("❌ Failed to start listener: \(error)")
+        }
     }
 }
 
@@ -245,6 +273,66 @@ final class SimulatedAndroidHandler: NetworkSessionDelegate, @unchecked Sendable
             print("📱 [Android Node] Sent File Chunk & Completion signal!")
 
             self.isComplete = true
+        }
+    }
+}
+
+final class HeadlessHostSessionHandler: NetworkSessionDelegate, @unchecked Sendable {
+    let session: ContinuityNetworkSession
+    let keyPair: KeyPair
+    let crypto = CryptoManager.shared
+    var sessionToken = "tok_headless_session"
+
+    init(session: ContinuityNetworkSession, keyPair: KeyPair) {
+        self.session = session
+        self.keyPair = keyPair
+    }
+
+    func sessionDidConnect(_ session: ContinuityNetworkSession) {
+        print("💻 [Host] Session connected: \(session.id)")
+    }
+
+    func sessionDidDisconnect(_ session: ContinuityNetworkSession, error: Error?) {
+        print("💻 [Host] Session disconnected: \(session.id)")
+    }
+
+    func session(_ session: ContinuityNetworkSession, didReceiveEnvelope envelope: ContinuityEnvelope) {
+        if let pairReq = envelope.pairRequest {
+            print("💻 [Host] Received PairRequest from \(pairReq.deviceName) (PIN: \(pairReq.pairingPin))")
+            var authTag = ""
+            if let key = try? crypto.deriveSessionKey(
+                localPrivateKey: keyPair.privateKey,
+                remotePublicKeyBase64: pairReq.ephemeralPublicKeyBase64,
+                pin: pairReq.pairingPin
+            ) {
+                authTag = crypto.computeAuthTag(sessionKey: key, challenge: pairReq.deviceId)
+            }
+
+            let confirm = PairConfirm(
+                deviceId: "mac-host-cli",
+                deviceName: Host.current().localizedName ?? "MacBook Pro",
+                platform: .macOS,
+                ephemeralPublicKeyBase64: keyPair.publicKeyBase64,
+                approved: true,
+                assignedSessionToken: sessionToken,
+                authTagBase64: authTag
+            )
+            var reply = ContinuityEnvelope(senderDeviceId: "mac-host-cli", sessionToken: sessionToken)
+            reply.pairConfirm = confirm
+            print("💻 [Host] Sending PairConfirm...")
+            session.send(envelope: reply)
+        } else if let hello = envelope.deviceHello {
+            print("💻 [Host] Peer Hello: \(hello.deviceModel) running \(hello.osVersion) (App v\(hello.appVersion))")
+        } else if let status = envelope.deviceStatus {
+            print("💻 [Host] Telemetry: Battery \(status.batteryPercentage)% (Charging: \(status.isCharging)), SSID: '\(status.wifiSsid)'")
+        } else if let notif = envelope.notificationEvent {
+            print("💻 [Host] Notification: [\(notif.appDisplayName)] \(notif.title): \(notif.text)")
+        } else if let offer = envelope.transferOffer {
+            print("💻 [Host] TransferOffer received: '\(offer.fileName)' (\(offer.fileSizeBytes) bytes, SHA256: \(offer.sha256Checksum.prefix(16))...)")
+        } else if let chunk = envelope.transferChunk {
+            print("💻 [Host] TransferChunk received: chunk \(chunk.chunkIndex)")
+        } else if let comp = envelope.transferComplete {
+            print("💻 [Host] TransferComplete verified: '\(comp.finalPathBasename)' (\(comp.bytesWritten) bytes written)")
         }
     }
 }

@@ -178,7 +178,8 @@ public final class FileTransferEngine: ObservableObject {
 
     public func handleIncomingComplete(_ complete: TransferComplete) {
         guard let idx = transfers.firstIndex(where: { $0.id == complete.transferId }) else { return }
-        let fileName = complete.finalPathBasename
+        let rawName = (complete.finalPathBasename as NSString).lastPathComponent
+        let fileName = rawName.isEmpty ? "file.bin" : rawName
         let tempURL = downloadsDirectory.appendingPathComponent("\(complete.transferId).part")
 
         var destinationURL = downloadsDirectory.appendingPathComponent(fileName)

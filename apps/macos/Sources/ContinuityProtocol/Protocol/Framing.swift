@@ -28,7 +28,7 @@ public enum FramingError: Error, LocalizedError {
 
 public struct FrameHeader {
     public static let magic: [UInt8] = [0x43, 0x4E, 0x54, 0x31] // "CNT1"
-    public static let headerSize = 8
+    public static let headerSize = 12 // 4 magic + 1 flags + 1 encMode + 2 reserved + 4 length = 12 bytes
     public static let maxPayloadSize: UInt32 = 16 * 1024 * 1024 // 16 MB
 
     public var flags: UInt8

@@ -13,6 +13,8 @@ import android.os.StatFs
 import android.util.Log
 import com.continuity.ecosystem.core.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -32,6 +34,7 @@ class ConnectionService : Service() {
     private var port: Int = 52400
     private var isConnected = false
     private var sessionToken: String? = null
+    private val writeMutex = Mutex()
 
     var onConnectionStateChanged: ((Boolean) -> Unit)? = null
     var onEnvelopeReceived: ((ContinuityEnvelope) -> Unit)? = null
@@ -93,8 +96,10 @@ class ConnectionService : Service() {
     fun sendEnvelope(envelope: ContinuityEnvelope) {
         scope.launch {
             try {
-                outputStream?.let {
-                    ProtocolFraming.writeEnvelope(it, envelope)
+                writeMutex.withLock {
+                    outputStream?.let {
+                        ProtocolFraming.writeEnvelope(it, envelope)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("ConnectionService", "Send error: ${e.message}")

@@ -149,7 +149,8 @@ class FileTransferManager(
     fun handleIncomingComplete(complete: TransferComplete) {
         val dir = File(context.filesDir, "transfers")
         val tempFile = File(dir, "${complete.transferId}.part")
-        val destFile = File(dir, complete.finalPathBasename)
+        val safeFileName = File(complete.finalPathBasename).name.ifEmpty { "file.bin" }
+        val destFile = File(dir, safeFileName)
         tempFile.renameTo(destFile)
 
         synchronized(activeTransfers) {

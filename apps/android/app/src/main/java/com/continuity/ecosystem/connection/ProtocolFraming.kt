@@ -31,26 +31,28 @@ object ProtocolFraming {
         output.flush()
     }
 
+    private fun readFully(input: InputStream, buffer: ByteArray): Boolean {
+        var offset = 0
+        while (offset < buffer.size) {
+            val bytesRead = input.read(buffer, offset, buffer.size - offset)
+            if (bytesRead == -1) return false
+            offset += bytesRead
+        }
+        return true
+    }
+
     fun readEnvelope(input: InputStream): ContinuityEnvelope? {
         val magicBuf = ByteArray(4)
-        var read = 0
-        while (read < 4) {
-            val r = input.read(magicBuf, read, 4 - read)
-            if (r == -1) return null
-            read += r
-        }
-
-        if (!magicBuf.contentEquals(MAGIC)) {
-            return null
-        }
+        if (!readFully(input, magicBuf)) return null
+        if (!magicBuf.contentEquals(MAGIC)) return null
 
         // Read 4 header bytes (flags, encMode, 2 reserved)
         val headerBuf = ByteArray(4)
-        input.read(headerBuf)
+        if (!readFully(input, headerBuf)) return null
 
         // Read 4 bytes length
         val lengthBuf = ByteArray(4)
-        input.read(lengthBuf)
+        if (!readFully(input, lengthBuf)) return null
         val length = ByteBuffer.wrap(lengthBuf).order(ByteOrder.BIG_ENDIAN).int
 
         if (length <= 0 || length > 16 * 1024 * 1024) {
@@ -58,12 +60,7 @@ object ProtocolFraming {
         }
 
         val payload = ByteArray(length)
-        var totalRead = 0
-        while (totalRead < length) {
-            val r = input.read(payload, totalRead, length - totalRead)
-            if (r == -1) return null
-            totalRead += r
-        }
+        if (!readFully(input, payload)) return null
 
         val jsonStr = String(payload, Charsets.UTF_8)
         return gson.fromJson(jsonStr, ContinuityEnvelope::class.java)
