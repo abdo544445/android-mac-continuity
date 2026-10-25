@@ -38,6 +38,8 @@ import com.continuity.ecosystem.connection.ConnectionService
 import com.continuity.ecosystem.connection.RawBinaryChunk
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 @Composable
 fun ContinuityWebcamScreen(
@@ -45,6 +47,8 @@ fun ContinuityWebcamScreen(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -63,9 +67,11 @@ fun ContinuityWebcamScreen(
     var isFrontCamera by remember { mutableStateOf(false) }
     var isTorchOn by remember { mutableStateOf(false) }
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
+    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-    var lastFrameTimeMs by remember { mutableStateOf(0L) }
-    var frameCounter by remember { mutableStateOf(0) }
+    val lastFrameTimeMs = remember { AtomicLong(0L) }
+    val frameCounter = remember { AtomicInteger(0) }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -73,14 +79,88 @@ fun ContinuityWebcamScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(hasCameraPermission) {
         if (!hasCameraPermission) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         } else {
-            // Start foreground camera streaming service
             val serviceIntent = Intent(context, CameraStreamingService::class.java)
             context.startForegroundService(serviceIntent)
         }
+    }
+
+    // Bind / Rebind Camera when lens changes or permission is granted
+    LaunchedEffect(hasCameraPermission, isFrontCamera, previewViewRef) {
+        val previewView = previewViewRef
+        if (!hasCameraPermission || previewView == null) return@LaunchedEffect
+
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            try {
+                val cameraProvider = cameraProviderFuture.get()
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+
+                val cameraSelector = if (isFrontCamera) {
+                    CameraSelector.DEFAULT_FRONT_CAMERA
+                } else {
+                    CameraSelector.DEFAULT_BACK_CAMERA
+                }
+
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setTargetResolution(android.util.Size(1280, 720))
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                    .build()
+
+                imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                    try {
+                        val now = System.currentTimeMillis()
+                        // Stream ~25 FPS to Mac
+                        if (now - lastFrameTimeMs.get() >= 40L) {
+                            lastFrameTimeMs.set(now)
+                            val bmp = imageProxy.toBitmap()
+                            val matrix = Matrix().apply {
+                                postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+                            }
+                            val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+                            val out = ByteArrayOutputStream(40960)
+                            rotated.compress(Bitmap.CompressFormat.JPEG, 65, out)
+                            val bytes = out.toByteArray()
+                            if (rotated !== bmp) {
+                                rotated.recycle()
+                            }
+                            bmp.recycle()
+
+                            ConnectionService.activeInstance?.sendStreamChunk(
+                                RawBinaryChunk(
+                                    transferId = "00000000-0000-0000-0000-000000CAMERA",
+                                    chunkIndex = frameCounter.getAndIncrement(),
+                                    chunkTotal = 1,
+                                    data = bytes
+                                )
+                            )
+                        }
+                    } catch (_: Exception) {
+                    } finally {
+                        try {
+                            imageProxy.close()
+                        } catch (_: Exception) {}
+                    }
+                }
+
+                cameraProvider.unbindAll()
+                val cam = cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    preview,
+                    imageAnalysis
+                )
+                cameraControl = cam.cameraControl
+            } catch (e: Exception) {
+                android.util.Log.e("WebcamScreen", "Binding failed: ${e.message}", e)
+            }
+        }, ContextCompat.getMainExecutor(context))
     }
 
     Box(
@@ -89,143 +169,11 @@ fun ContinuityWebcamScreen(
             .background(Color.Black)
     ) {
         if (hasCameraPermission) {
-            val lifecycleOwner = LocalLifecycleOwner.current
-
             AndroidView(
                 factory = { ctx ->
-                    val previewView = PreviewView(ctx)
-                    val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-
-                    cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
-                        val preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
-
-                        val cameraSelector = if (isFrontCamera) {
-                            CameraSelector.DEFAULT_FRONT_CAMERA
-                        } else {
-                            CameraSelector.DEFAULT_BACK_CAMERA
-                        }
-
-                        val imageAnalysis = ImageAnalysis.Builder()
-                            .setTargetResolution(android.util.Size(1280, 720))
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                            .build()
-
-                        imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                            try {
-                                val now = System.currentTimeMillis()
-                                if (now - lastFrameTimeMs >= 40L) { // ~25 FPS
-                                    lastFrameTimeMs = now
-                                    val bmp = imageProxy.toBitmap()
-                                    val matrix = Matrix().apply {
-                                        postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
-                                    }
-                                    val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
-                                    val out = ByteArrayOutputStream()
-                                    rotated.compress(Bitmap.CompressFormat.JPEG, 65, out)
-                                    val bytes = out.toByteArray()
-                                    if (rotated !== bmp) {
-                                        rotated.recycle()
-                                    }
-                                    bmp.recycle()
-
-                                    ConnectionService.activeInstance?.sendStreamChunk(
-                                        RawBinaryChunk(
-                                            transferId = "00000000-0000-0000-0000-000000CAMERA",
-                                            chunkIndex = frameCounter++,
-                                            chunkTotal = 1,
-                                            data = bytes
-                                        )
-                                    )
-                                }
-                            } catch (_: Exception) {
-                            } finally {
-                                imageProxy.close()
-                            }
-                        }
-
-                        try {
-                            cameraProvider.unbindAll()
-                            val cam = cameraProvider.bindToLifecycle(
-                                lifecycleOwner,
-                                cameraSelector,
-                                preview,
-                                imageAnalysis
-                            )
-                            cameraControl = cam.cameraControl
-                        } catch (e: Exception) {
-                            android.util.Log.e("WebcamScreen", "Binding failed", e)
-                        }
-                    }, ContextCompat.getMainExecutor(ctx))
-
-                    previewView
-                },
-                update = { previewView ->
-                    val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-                    cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
-                        val preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
-                        val cameraSelector = if (isFrontCamera) {
-                            CameraSelector.DEFAULT_FRONT_CAMERA
-                        } else {
-                            CameraSelector.DEFAULT_BACK_CAMERA
-                        }
-
-                        val imageAnalysis = ImageAnalysis.Builder()
-                            .setTargetResolution(android.util.Size(1280, 720))
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                            .build()
-
-                        imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                            try {
-                                val now = System.currentTimeMillis()
-                                if (now - lastFrameTimeMs >= 40L) { // ~25 FPS
-                                    lastFrameTimeMs = now
-                                    val bmp = imageProxy.toBitmap()
-                                    val matrix = Matrix().apply {
-                                        postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
-                                    }
-                                    val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
-                                    val out = ByteArrayOutputStream()
-                                    rotated.compress(Bitmap.CompressFormat.JPEG, 65, out)
-                                    val bytes = out.toByteArray()
-                                    if (rotated !== bmp) {
-                                        rotated.recycle()
-                                    }
-                                    bmp.recycle()
-
-                                    ConnectionService.activeInstance?.sendStreamChunk(
-                                        RawBinaryChunk(
-                                            transferId = "00000000-0000-0000-0000-000000CAMERA",
-                                            chunkIndex = frameCounter++,
-                                            chunkTotal = 1,
-                                            data = bytes
-                                        )
-                                    )
-                                }
-                            } catch (_: Exception) {
-                            } finally {
-                                imageProxy.close()
-                            }
-                        }
-
-                        try {
-                            cameraProvider.unbindAll()
-                            val cam = cameraProvider.bindToLifecycle(
-                                lifecycleOwner,
-                                cameraSelector,
-                                preview,
-                                imageAnalysis
-                            )
-                            cameraControl = cam.cameraControl
-                        } catch (_: Exception) {}
-                    }, ContextCompat.getMainExecutor(context))
+                    PreviewView(ctx).also {
+                        previewViewRef = it
+                    }
                 },
                 modifier = Modifier.fillMaxSize()
             )

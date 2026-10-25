@@ -261,6 +261,13 @@ class MainActivity : ComponentActivity() {
             env.storageListRequest?.let { req ->
                 storageExplorerService.handleStorageListRequest(req, service)
             }
+            env.inputEvent?.let { input ->
+                input.textInput?.let { txt ->
+                    if (txt.isNotEmpty()) {
+                        clipboardManager.copyText(txt)
+                    }
+                }
+            }
             env.sessionRequest?.let { req ->
                 if (req.type == SessionType.SESSION_SCREEN_MIRROR) {
                     val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager

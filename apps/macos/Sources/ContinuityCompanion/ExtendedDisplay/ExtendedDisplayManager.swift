@@ -34,6 +34,10 @@ public final class ExtendedDisplayManager: ObservableObject {
             return
         }
 
+        if !CGPreflightScreenCaptureAccess() {
+            CGRequestScreenCaptureAccess()
+        }
+
         isStreaming = true
         sequenceNumber = 0
 

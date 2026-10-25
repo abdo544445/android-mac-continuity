@@ -103,13 +103,17 @@ class ClipboardSyncManager(private val context: Context) {
 
             // Handle Text Clipboard from Mac
             val text = String(bytes, Charsets.UTF_8)
-            val clip = ClipData.newPlainText("Continuity", text)
-            clipboard.setPrimaryClip(clip)
-            Log.w("ContinuityDebug", "Text copied from Mac to Android Clipboard (${text.length} chars)")
-            Toast.makeText(context, "📋 Copied from Mac: ${text.take(30)}", Toast.LENGTH_SHORT).show()
+            copyText(text)
         } catch (e: Exception) {
             Log.e("ContinuityDebug", "handleIncomingClipboard error: ${e.message}", e)
         }
+    }
+
+    fun copyText(text: String) {
+        val clip = ClipData.newPlainText("Continuity", text)
+        clipboard.setPrimaryClip(clip)
+        Log.w("ContinuityDebug", "Text copied from Mac to Android Clipboard (${text.length} chars)")
+        Toast.makeText(context, "📋 Copied from Mac: ${text.take(30)}", Toast.LENGTH_SHORT).show()
     }
 
     /**

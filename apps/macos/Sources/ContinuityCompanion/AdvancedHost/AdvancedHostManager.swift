@@ -158,7 +158,11 @@ public final class AdvancedHostManager: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: adbPath)
         process.environment = buildProcessEnvironment()
-        process.arguments = ["reverse", "tcp:\(port)", "tcp:\(port)"]
+        var args = ["reverse", "tcp:\(port)", "tcp:\(port)"]
+        if let target = connectedAdbDevices.first, !target.isEmpty {
+            args = ["-s", target] + args
+        }
+        process.arguments = args
         do {
             try process.run()
             process.waitUntilExit()
@@ -168,22 +172,15 @@ public final class AdvancedHostManager: ObservableObject {
         }
     }
 
-    /// Attempts to connect ADB wirelessly to a discovered LAN peer IP if no USB device is attached.
+    /// Attempts to connect ADB wirelessly to a discovered LAN peer IP if no device is attached.
     public func connectWirelessAdbIfNeeded(peerIp: String?) async {
         guard isAdbAvailable, let ip = peerIp, !ip.isEmpty, ip != "127.0.0.1" else { return }
+        if !connectedAdbDevices.isEmpty { return }
+
         let path = adbPath
         let env = buildProcessEnvironment()
 
         await Task.detached {
-            // Enable tcpip 5555 if USB device is currently attached
-            let tcpProc = Process()
-            tcpProc.executableURL = URL(fileURLWithPath: path)
-            tcpProc.environment = env
-            tcpProc.arguments = ["tcpip", "5555"]
-            try? tcpProc.run()
-            tcpProc.waitUntilExit()
-
-            // Connect to peer IP:5555
             let connProc = Process()
             connProc.executableURL = URL(fileURLWithPath: path)
             connProc.environment = env

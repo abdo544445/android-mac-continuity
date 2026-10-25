@@ -1,6 +1,7 @@
 package com.continuity.ecosystem.storage
 
 import android.content.Context
+import android.os.Build
 import android.os.Environment
 import android.util.Log
 import com.continuity.ecosystem.connection.ConnectionService
@@ -13,8 +14,9 @@ import java.io.File
 class StorageExplorerService(private val context: Context) {
 
     fun handleStorageListRequest(request: StorageListRequest, service: ConnectionService) {
+        val rootPath = Environment.getExternalStorageDirectory()?.absolutePath ?: "/storage/emulated/0"
         val targetPath = if (request.path.isEmpty() || request.path == "/" || request.path == "~") {
-            Environment.getExternalStorageDirectory()?.absolutePath ?: context.filesDir.absolutePath
+            rootPath
         } else {
             request.path
         }
@@ -27,7 +29,6 @@ class StorageExplorerService(private val context: Context) {
             val fileList = dir.listFiles()
             if (fileList != null) {
                 for (f in fileList) {
-                    // Filter out hidden/system internal cache dotfiles if desired
                     if (f.name.startsWith(".") && f.name != ".ContinuitySync") continue
                     items.add(
                         StorageItem(
@@ -35,6 +36,27 @@ class StorageExplorerService(private val context: Context) {
                             isDirectory = f.isDirectory,
                             sizeBytes = if (f.isDirectory) 0L else f.length(),
                             modifiedTimeMs = f.lastModified()
+                        )
+                    )
+                }
+            } else if (targetPath == rootPath) {
+                // Scoped Storage fallback: synthesize standard user directories
+                val commonDirs = listOf(
+                    Environment.DIRECTORY_DOWNLOADS,
+                    Environment.DIRECTORY_DOCUMENTS,
+                    Environment.DIRECTORY_PICTURES,
+                    Environment.DIRECTORY_DCIM,
+                    Environment.DIRECTORY_MOVIES,
+                    Environment.DIRECTORY_MUSIC
+                )
+                for (name in commonDirs) {
+                    val sub = Environment.getExternalStoragePublicDirectory(name)
+                    items.add(
+                        StorageItem(
+                            name = sub.name,
+                            isDirectory = true,
+                            sizeBytes = 0L,
+                            modifiedTimeMs = if (sub.exists()) sub.lastModified() else System.currentTimeMillis()
                         )
                     )
                 }

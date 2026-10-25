@@ -81,10 +81,36 @@ public struct MirroringView: View {
                 Color.black
 
                 if let mirrorImg = agent.liveMirrorFrame {
-                    Image(nsImage: mirrorImg)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    GeometryReader { geo in
+                        Image(nsImage: mirrorImg)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onEnded { value in
+                                        let imgW = mirrorImg.size.width
+                                        let imgH = mirrorImg.size.height
+                                        guard geo.size.width > 0, geo.size.height > 0, imgW > 0, imgH > 0 else { return }
+
+                                        let scale = min(geo.size.width / imgW, geo.size.height / imgH)
+                                        let displayedW = imgW * scale
+                                        let displayedH = imgH * scale
+                                        let originX = (geo.size.width - displayedW) / 2
+                                        let originY = (geo.size.height - displayedH) / 2
+
+                                        let clickX = value.location.x - originX
+                                        let clickY = value.location.y - originY
+
+                                        if clickX >= 0 && clickX <= displayedW && clickY >= 0 && clickY <= displayedH {
+                                            let normX = Float(clickX / displayedW)
+                                            let normY = Float(clickY / displayedH)
+                                            handleMirrorTap(normX: normX, normY: normY)
+                                        }
+                                    }
+                            )
+                    }
                 } else {
                     VStack(spacing: 18) {
                         Image(systemName: isDropTargeted ? "photo.badge.plus.fill" : "ipad.and.iphone")
@@ -260,5 +286,15 @@ public struct MirroringView: View {
         env.inputEvent = InputEvent(sessionId: "mirror", action: .keyDown, keyCode: code)
         agent.activeSession?.send(envelope: env)
         advancedHost.executeAdbCommand(args: ["shell", "input", "keyevent", "\(code)"])
+    }
+
+    private func handleMirrorTap(normX: Float, normY: Float) {
+        var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
+        env.inputEvent = InputEvent(sessionId: "mirror", action: .down, normalizedX: normX, normalizedY: normY)
+        agent.activeSession?.send(envelope: env)
+
+        let targetX = Int(normX * 1080)
+        let targetY = Int(normY * 2400)
+        advancedHost.executeAdbCommand(args: ["shell", "input", "tap", "\(targetX)", "\(targetY)"])
     }
 }
