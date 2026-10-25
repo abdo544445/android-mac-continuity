@@ -62,6 +62,21 @@ def run_android_test_suite():
     reassembled_buffer = b"".join(chunks)
     assert_test(reassembled_buffer == frame, "Sliced / fragmented TCP stream safely reassembled by readFully")
 
+    # Test 1.3: Raw binary chunk serialization (FLAG_BINARY_CHUNK = 0x01)
+    raw_data = b"Raw binary bytes payload without Base64 encoding"
+    tx_id = "12345678-1234-1234-1234-123456789abc"
+    id_bytes = tx_id.encode("utf-8").ljust(36, b"\x00")[:36]
+    payload_len = 36 + 4 + 4 + len(raw_data)
+    binary_frame = MAGIC + bytes([0x01, 0x00, 0x00, 0x00]) + struct.pack(">I", payload_len) + id_bytes + struct.pack(">II", 2, 5) + raw_data
+
+    assert_test(binary_frame[4] == 0x01, "Frame header flag 0x01 indicates raw binary chunk")
+    assert_test(struct.unpack(">I", binary_frame[8:12])[0] == payload_len, "Raw binary frame payload length matches header + data")
+    meta_tx_id = binary_frame[12:48].decode("utf-8").rstrip("\x00 ")
+    assert_test(meta_tx_id == tx_id, "Decoded 36-byte raw transferId matches UUID")
+    chunk_idx, chunk_tot = struct.unpack(">II", binary_frame[48:56])
+    assert_test(chunk_idx == 2 and chunk_tot == 5, "Decoded chunk index (2) and total (5) match")
+    assert_test(binary_frame[56:] == raw_data, "Decoded raw data slice matches payload exactly")
+
     # --- 2. CRYPTOGRAPHIC & IDENTITY TESTS ---
     print("\n--- 2. Cryptographic & Identity Tests (DeviceIdentity.kt) ---")
 
@@ -112,6 +127,19 @@ def run_android_test_suite():
     assert_test(calc_chunks(512 * 1024) == 1, "Chunk count for exact 512KB boundary is 1")
     assert_test(calc_chunks(512 * 1024 + 1) == 2, "Chunk count for 512KB + 1 byte is 2")
     assert_test(calc_chunks(1024 * 1024 + 100) == 3, "Chunk count for 1MB + 100 bytes is 3")
+
+    # Adaptive chunk sizing tests
+    def adaptive_chunk_size(size_bytes: int) -> int:
+        if size_bytes < 5 * 1024 * 1024:
+            return 256 * 1024
+        elif size_bytes < 50 * 1024 * 1024:
+            return 1024 * 1024
+        else:
+            return 4 * 1024 * 1024
+
+    assert_test(adaptive_chunk_size(2 * 1024 * 1024) == 256 * 1024, "Adaptive size for 2MB file is 256KB")
+    assert_test(adaptive_chunk_size(20 * 1024 * 1024) == 1024 * 1024, "Adaptive size for 20MB file is 1MB")
+    assert_test(adaptive_chunk_size(100 * 1024 * 1024) == 4 * 1024 * 1024, "Adaptive size for 100MB file is 4MB")
 
     # Path traversal sanitization
     def sanitize_basename(path_input: str) -> str:

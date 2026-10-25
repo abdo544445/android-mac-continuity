@@ -76,8 +76,30 @@ public final class AdvancedHostManager: ObservableObject {
                 let finalDevices = devices
                 await MainActor.run {
                     self.connectedAdbDevices = finalDevices
+                    if !finalDevices.isEmpty {
+                        _ = self.setupAdbReverseTunnel(port: 52400)
+                    }
                 }
             }
+        }
+    }
+
+    public func setupAdbReverseTunnel(port: Int = 52400) -> Bool {
+        guard isAdbAvailable else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: adbPath)
+        process.arguments = ["reverse", "tcp:\(port)", "tcp:\(port)"]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let success = process.terminationStatus == 0
+            if success {
+                print("[ADB Fast-Path] Reverse tunnel active: phone 127.0.0.1:\(port) ➔ Mac :\(port)")
+            }
+            return success
+        } catch {
+            print("[ADB Fast-Path] Failed: \(error)")
+            return false
         }
     }
 

@@ -38,6 +38,7 @@ class ConnectionService : Service() {
 
     var onConnectionStateChanged: ((Boolean) -> Unit)? = null
     var onEnvelopeReceived: ((ContinuityEnvelope) -> Unit)? = null
+    var onBinaryChunkReceived: ((RawBinaryChunk) -> Unit)? = null
 
     inner class LocalBinder : Binder() {
         fun getService(): ConnectionService = this@ConnectionService
@@ -60,6 +61,9 @@ class ConnectionService : Service() {
                 disconnect()
                 Log.d("ConnectionService", "Connecting to $host:$port...")
                 val sock = Socket()
+                sock.tcpNoDelay = true
+                sock.sendBufferSize = 4 * 1024 * 1024
+                sock.receiveBufferSize = 4 * 1024 * 1024
                 sock.connect(InetSocketAddress(host, port), 5000)
                 socket = sock
                 outputStream = sock.getOutputStream()
@@ -108,14 +112,38 @@ class ConnectionService : Service() {
         }
     }
 
+    fun sendBinaryChunk(chunk: RawBinaryChunk) {
+        scope.launch {
+            try {
+                writeMutex.withLock {
+                    outputStream?.let {
+                        ProtocolFraming.writeBinaryChunk(it, chunk)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ConnectionService", "Send chunk error: ${e.message}")
+                handleDisconnect()
+            }
+        }
+    }
+
     private fun readLoop() {
         while (isConnected && inputStream != null) {
             try {
-                val envelope = ProtocolFraming.readEnvelope(inputStream!!)
-                if (envelope != null) {
-                    envelope.sessionToken?.let { sessionToken = it }
-                    withContext(Dispatchers.Main) {
-                        onEnvelopeReceived?.invoke(envelope)
+                val frame = ProtocolFraming.readFrame(inputStream!!)
+                if (frame != null) {
+                    when (frame) {
+                        is DecodedFrame.Envelope -> {
+                            frame.envelope.sessionToken?.let { sessionToken = it }
+                            scope.launch(Dispatchers.Main) {
+                                onEnvelopeReceived?.invoke(frame.envelope)
+                            }
+                        }
+                        is DecodedFrame.BinaryChunk -> {
+                            scope.launch(Dispatchers.Main) {
+                                onBinaryChunkReceived?.invoke(frame.chunk)
+                            }
+                        }
                     }
                 } else {
                     break
@@ -169,7 +197,7 @@ class ConnectionService : Service() {
         socket = null
         outputStream = null
         inputStream = null
-        withContext(Dispatchers.Main) {
+        scope.launch(Dispatchers.Main) {
             onConnectionStateChanged?.invoke(false)
         }
     }

@@ -115,6 +115,12 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
         }
     }
 
+    public nonisolated func session(_ session: ContinuityNetworkSession, didReceiveBinaryChunk chunk: RawBinaryChunk) {
+        Task { @MainActor in
+            FileTransferEngine.shared.handleIncomingBinaryChunk(chunk, session: session)
+        }
+    }
+
     // MARK: - Envelope Dispatch
 
     private func processEnvelope(_ envelope: ContinuityEnvelope, session: ContinuityNetworkSession) {

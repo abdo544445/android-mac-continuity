@@ -120,6 +120,37 @@ struct ContinuityCLI {
             assert(false, "Serialization failed: \(error)")
         }
 
+        // Test 5: Raw Binary Chunk Framing & High-Speed Wire Transfer
+        do {
+            let rawPayload = Data((0..<1024).map { UInt8($0 % 256) })
+            let testUUID = "12345678-1234-1234-1234-123456789abc"
+            let rawChunk = RawBinaryChunk(
+                transferId: testUUID,
+                chunkIndex: 3,
+                chunkTotal: 10,
+                data: rawPayload
+            )
+            let encoder = FrameEncoder()
+            let encodedBytes = encoder.encode(binaryChunk: rawChunk)
+
+            let decoder = FrameDecoder()
+            decoder.append(data: encodedBytes)
+            let frame = try decoder.nextFrame()
+
+            var verified = false
+            if case .binaryChunk(let decodedChunk) = frame {
+                if decodedChunk.transferId == testUUID &&
+                   decodedChunk.chunkIndex == 3 &&
+                   decodedChunk.chunkTotal == 10 &&
+                   decodedChunk.data == rawPayload {
+                    verified = true
+                }
+            }
+            assert(verified, "Raw binary chunk encoding/decoding line-rate roundtrip")
+        } catch {
+            assert(false, "Binary chunk test failed: \(error)")
+        }
+
         print("\n📊 Test Results: \(passed) Passed, \(failed) Failed")
         if failed > 0 {
             exit(1)

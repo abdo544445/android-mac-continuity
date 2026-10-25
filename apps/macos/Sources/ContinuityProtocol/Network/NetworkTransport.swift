@@ -5,6 +5,11 @@ public protocol NetworkSessionDelegate: AnyObject, Sendable {
     func sessionDidConnect(_ session: ContinuityNetworkSession)
     func sessionDidDisconnect(_ session: ContinuityNetworkSession, error: Error?)
     func session(_ session: ContinuityNetworkSession, didReceiveEnvelope envelope: ContinuityEnvelope)
+    func session(_ session: ContinuityNetworkSession, didReceiveBinaryChunk chunk: RawBinaryChunk)
+}
+
+public extension NetworkSessionDelegate {
+    func session(_ session: ContinuityNetworkSession, didReceiveBinaryChunk chunk: RawBinaryChunk) {}
 }
 
 public final class ContinuityNetworkSession: @unchecked Sendable {
@@ -58,15 +63,28 @@ public final class ContinuityNetworkSession: @unchecked Sendable {
         }
     }
 
+    public func send(binaryChunk: RawBinaryChunk, completion: (@Sendable (Error?) -> Void)? = nil) {
+        let data = frameEncoder.encode(binaryChunk: binaryChunk)
+        connection.send(content: data, completion: .contentProcessed { error in
+            completion?(error)
+        })
+    }
+
     private func receiveNext() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
+        // High-speed 4MB read window for saturated line-rate streaming
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 4 * 1024 * 1024) { [weak self] content, _, isComplete, error in
             guard let self = self else { return }
 
             if let data = content, !data.isEmpty {
                 self.frameDecoder.append(data: data)
                 do {
-                    while let envelope = try self.frameDecoder.nextEnvelope() {
-                        self.delegate?.session(self, didReceiveEnvelope: envelope)
+                    while let frame = try self.frameDecoder.nextFrame() {
+                        switch frame {
+                        case .envelope(let envelope):
+                            self.delegate?.session(self, didReceiveEnvelope: envelope)
+                        case .binaryChunk(let chunk):
+                            self.delegate?.session(self, didReceiveBinaryChunk: chunk)
+                        }
                     }
                 } catch {
                     self.delegate?.sessionDidDisconnect(self, error: error)
@@ -104,6 +122,10 @@ public final class ContinuityNetworkListener: @unchecked Sendable {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         params.includePeerToPeer = true
+        if let tcpOptions = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+            tcpOptions.noDelay = true
+            tcpOptions.enableKeepalive = true
+        }
 
         let nwPort = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port(52400)
         let listener = try NWListener(using: params, on: nwPort)

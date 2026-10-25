@@ -36,7 +36,16 @@ public final class FileTransferEngine: ObservableObject {
     @Published public var transfers: [ActiveTransfer] = []
 
     public let downloadsDirectory: URL
-    private let chunkSize: Int = 512 * 1024 // 512 KB
+
+    public static func adaptiveChunkSize(for fileSizeBytes: Int64) -> Int {
+        if fileSizeBytes < 5 * 1024 * 1024 {
+            return 256 * 1024 // 256 KB
+        } else if fileSizeBytes < 50 * 1024 * 1024 {
+            return 1024 * 1024 // 1 MB
+        } else {
+            return 4 * 1024 * 1024 // 4 MB for large files & USB
+        }
+    }
 
     public init() {
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
@@ -55,6 +64,7 @@ public final class FileTransferEngine: ObservableObject {
 
         let transferId = UUID().uuidString
         let fileName = fileURL.lastPathComponent
+        let effectiveChunkSize = Self.adaptiveChunkSize(for: fileSize)
 
         let transfer = ActiveTransfer(
             id: transferId,
@@ -68,7 +78,7 @@ public final class FileTransferEngine: ObservableObject {
         )
         transfers.insert(transfer, at: 0)
 
-        // Asynchronously process and send
+        // Asynchronously stream without Base64 overhead
         Task.detached {
             guard let fileData = try? Data(contentsOf: fileURL) else {
                 await self.updateStatus(transferId: transferId, status: .failed, error: "Failed to read file")
@@ -76,7 +86,7 @@ public final class FileTransferEngine: ObservableObject {
             }
 
             let checksum = CryptoManager.shared.sha256Hex(data: fileData)
-            let totalChunks = Int32((fileData.count + self.chunkSize - 1) / self.chunkSize)
+            let totalChunks = Int32((fileData.count + effectiveChunkSize - 1) / effectiveChunkSize)
 
             let offer = TransferOffer(
                 transferId: transferId,
@@ -84,39 +94,35 @@ public final class FileTransferEngine: ObservableObject {
                 fileSizeBytes: fileSize,
                 sha256Checksum: checksum,
                 totalChunks: totalChunks,
-                chunkSizeBytes: Int64(self.chunkSize)
+                chunkSizeBytes: Int64(effectiveChunkSize)
             )
 
             var offerEnvelope = ContinuityEnvelope(senderDeviceId: "macos-companion")
             offerEnvelope.transferOffer = offer
             session?.send(envelope: offerEnvelope)
 
-            // Send chunks
+            // Send raw binary chunks without Base64 or artificial sleep pauses
             var offset = 0
             var chunkIdx: Int32 = 0
 
             while offset < fileData.count {
-                let thisChunkSize = min(self.chunkSize, fileData.count - offset)
+                let thisChunkSize = min(effectiveChunkSize, fileData.count - offset)
                 let chunkBytes = fileData.subdata(in: offset..<(offset + thisChunkSize))
-                let chunkHash = CryptoManager.shared.sha256Hex(data: chunkBytes)
 
-                let chunkMsg = TransferChunk(
+                let rawChunk = RawBinaryChunk(
                     transferId: transferId,
-                    chunkIndex: chunkIdx,
-                    dataBase64: chunkBytes.base64EncodedString(),
-                    chunkSha256: chunkHash
+                    chunkIndex: UInt32(chunkIdx),
+                    chunkTotal: UInt32(totalChunks),
+                    data: chunkBytes
                 )
 
-                var chunkEnvelope = ContinuityEnvelope(senderDeviceId: "macos-companion")
-                chunkEnvelope.transferChunk = chunkMsg
-                session?.send(envelope: chunkEnvelope)
+                session?.send(binaryChunk: rawChunk)
 
                 offset += thisChunkSize
                 chunkIdx += 1
 
                 let transferred = Int64(offset)
                 await self.updateProgress(transferId: transferId, bytesTransferred: transferred)
-                try? await Task.sleep(nanoseconds: 2_000_000) // 2ms throttle to prevent buffer starvation
             }
 
             let complete = TransferComplete(
@@ -152,10 +158,25 @@ public final class FileTransferEngine: ObservableObject {
         session?.send(envelope: env)
     }
 
+    public func handleIncomingBinaryChunk(_ chunk: RawBinaryChunk, session: ContinuityNetworkSession?) {
+        let tempURL = downloadsDirectory.appendingPathComponent("\(chunk.transferId).part")
+        if let handle = try? FileHandle(forWritingTo: tempURL) {
+            handle.seekToEndOfFile()
+            handle.write(chunk.data)
+            try? handle.close()
+        } else {
+            try? chunk.data.write(to: tempURL)
+        }
+
+        if let idx = transfers.firstIndex(where: { $0.id == chunk.transferId }) {
+            transfers[idx].bytesTransferred += Int64(chunk.data.count)
+        }
+    }
+
     public func handleIncomingChunk(_ chunk: TransferChunk, session: ContinuityNetworkSession?) {
+        // Fallback for JSON Base64 chunks if received from legacy client
         guard let chunkData = Data(base64Encoded: chunk.dataBase64) else { return }
 
-        // Verify chunk hash
         let computed = CryptoManager.shared.sha256Hex(data: chunkData)
         guard computed == chunk.chunkSha256 else {
             updateStatus(transferId: chunk.transferId, status: .failed, error: "Chunk checksum mismatch")

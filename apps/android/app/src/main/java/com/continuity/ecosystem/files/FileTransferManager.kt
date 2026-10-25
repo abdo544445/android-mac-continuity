@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import com.continuity.ecosystem.connection.ConnectionService
+import com.continuity.ecosystem.connection.RawBinaryChunk
 import com.continuity.ecosystem.core.*
 import kotlinx.coroutines.*
 import java.io.File
@@ -32,7 +33,15 @@ class FileTransferManager(
     val activeTransfers = mutableListOf<AndroidTransferItem>()
     var onTransfersUpdated: (() -> Unit)? = null
 
-    private val chunkSize = 512 * 1024 // 512 KB
+    companion object {
+        fun adaptiveChunkSize(fileSizeBytes: Long): Int {
+            return when {
+                fileSizeBytes < 5 * 1024 * 1024 -> 256 * 1024 // 256 KB
+                fileSizeBytes < 50 * 1024 * 1024 -> 1024 * 1024 // 1 MB
+                else -> 4 * 1024 * 1024 // 4 MB for large/USB transfers
+            }
+        }
+    }
 
     fun sendFile(fileUri: Uri, service: ConnectionService) {
         scope.launch {
@@ -41,6 +50,7 @@ class FileTransferManager(
             val fileSize = fileBytes.size.toLong()
             val checksum = identity.sha256Hex(fileBytes)
             val transferId = UUID.randomUUID().toString()
+            val effectiveChunkSize = adaptiveChunkSize(fileSize)
 
             val item = AndroidTransferItem(
                 id = transferId,
@@ -53,14 +63,14 @@ class FileTransferManager(
             }
             withContext(Dispatchers.Main) { onTransfersUpdated?.invoke() }
 
-            val totalChunks = ((fileBytes.size + chunkSize - 1) / chunkSize)
+            val totalChunks = ((fileBytes.size + effectiveChunkSize - 1) / effectiveChunkSize)
             val offer = TransferOffer(
                 transferId = transferId,
                 fileName = fileName,
                 fileSizeBytes = fileSize,
                 sha256Checksum = checksum,
                 totalChunks = totalChunks,
-                chunkSizeBytes = chunkSize.toLong()
+                chunkSizeBytes = effectiveChunkSize.toLong()
             )
 
             service.sendEnvelope(ContinuityEnvelope(
@@ -72,27 +82,21 @@ class FileTransferManager(
             var chunkIndex = 0
 
             while (offset < fileBytes.size) {
-                val len = minOf(chunkSize, fileBytes.size - offset)
+                val len = minOf(effectiveChunkSize, fileBytes.size - offset)
                 val chunk = fileBytes.copyOfRange(offset, offset + len)
-                val chunkHash = identity.sha256Hex(chunk)
 
-                val chunkMsg = TransferChunk(
+                val rawChunk = RawBinaryChunk(
                     transferId = transferId,
                     chunkIndex = chunkIndex,
-                    dataBase64 = Base64.encodeToString(chunk, Base64.NO_WRAP),
-                    chunkSha256 = chunkHash
+                    chunkTotal = totalChunks,
+                    data = chunk
                 )
-
-                service.sendEnvelope(ContinuityEnvelope(
-                    senderDeviceId = identity.deviceId,
-                    transferChunk = chunkMsg
-                ))
+                service.sendBinaryChunk(rawChunk)
 
                 offset += len
                 chunkIndex++
                 item.bytesTransferred = offset.toLong()
                 withContext(Dispatchers.Main) { onTransfersUpdated?.invoke() }
-                delay(2) // 2ms rate limit
             }
 
             service.sendEnvelope(ContinuityEnvelope(
@@ -129,7 +133,22 @@ class FileTransferManager(
         ))
     }
 
+    fun handleIncomingBinaryChunk(chunk: RawBinaryChunk) {
+        val dir = File(context.filesDir, "transfers").also { it.mkdirs() }
+        val tempFile = File(dir, "${chunk.transferId}.part")
+        FileOutputStream(tempFile, true).use { it.write(chunk.data) }
+
+        synchronized(activeTransfers) {
+            val item = activeTransfers.find { it.id == chunk.transferId }
+            item?.let {
+                it.bytesTransferred += chunk.data.size
+            }
+        }
+        scope.launch(Dispatchers.Main) { onTransfersUpdated?.invoke() }
+    }
+
     fun handleIncomingChunk(chunk: TransferChunk) {
+        // Fallback for JSON Base64 chunks if received
         val chunkBytes = Base64.decode(chunk.dataBase64, Base64.NO_WRAP)
         val computedHash = identity.sha256Hex(chunkBytes)
         if (computedHash != chunk.chunkSha256) return
@@ -139,36 +158,58 @@ class FileTransferManager(
         FileOutputStream(tempFile, true).use { it.write(chunkBytes) }
 
         synchronized(activeTransfers) {
-            activeTransfers.find { it.id == chunk.transferId }?.let {
+            val item = activeTransfers.find { it.id == chunk.transferId }
+            item?.let {
                 it.bytesTransferred += chunkBytes.size
             }
         }
-        onTransfersUpdated?.invoke()
+        scope.launch(Dispatchers.Main) { onTransfersUpdated?.invoke() }
     }
 
     fun handleIncomingComplete(complete: TransferComplete) {
-        val dir = File(context.filesDir, "transfers")
+        val rawName = File(complete.finalPathBasename).name
+        val fileName = if (rawName.isEmpty()) "file.bin" else rawName
+        val dir = File(context.filesDir, "transfers").also { it.mkdirs() }
         val tempFile = File(dir, "${complete.transferId}.part")
-        val safeFileName = File(complete.finalPathBasename).name.ifEmpty { "file.bin" }
-        val destFile = File(dir, safeFileName)
-        tempFile.renameTo(destFile)
+
+        var destination = File(dir, fileName)
+        var counter = 1
+        val baseName = destination.nameWithoutExtension
+        val ext = destination.extension
+
+        while (destination.exists()) {
+            val newName = if (ext.isEmpty()) "$baseName ($counter)" else "$baseName ($counter).$ext"
+            destination = File(dir, newName)
+            counter++
+        }
+
+        tempFile.renameTo(destination)
 
         synchronized(activeTransfers) {
-            activeTransfers.find { it.id == complete.transferId }?.let {
+            val item = activeTransfers.find { it.id == complete.transferId }
+            item?.let {
                 it.isCompleted = true
+                it.bytesTransferred = complete.bytesWritten
             }
         }
-        onTransfersUpdated?.invoke()
+        scope.launch(Dispatchers.Main) { onTransfersUpdated?.invoke() }
     }
 
     private fun getFileName(uri: Uri): String? {
         var name: String? = null
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (cursor.moveToFirst() && nameIndex >= 0) {
-                name = cursor.getString(nameIndex)
+        if (uri.scheme == "content") {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx != -1) name = cursor.getString(idx)
+                }
             }
         }
-        return name ?: uri.lastPathSegment
+        if (name == null) {
+            name = uri.path
+            val cut = name?.lastIndexOf('/') ?: -1
+            if (cut != -1) name = name?.substring(cut + 1)
+        }
+        return name
     }
 }

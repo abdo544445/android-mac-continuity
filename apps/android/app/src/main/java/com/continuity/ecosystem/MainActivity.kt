@@ -7,6 +7,7 @@ import android.content.ServiceConnection
 import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
+import android.media.projection.MediaProjectionManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +25,8 @@ import com.continuity.ecosystem.connection.ConnectionService
 import com.continuity.ecosystem.core.DeviceIdentity
 import com.continuity.ecosystem.files.FileTransferManager
 import com.continuity.ecosystem.pairing.PairingManager
+import com.continuity.ecosystem.mirroring.ScreenShareService
+import com.continuity.ecosystem.ui.screens.ContinuityWebcamScreen
 import com.continuity.ecosystem.ui.screens.HomeScreen
 import com.continuity.ecosystem.ui.screens.PairingScreen
 import com.continuity.ecosystem.ui.screens.SettingsScreen
@@ -63,6 +66,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val mediaProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            ScreenShareService.resultCode = result.resultCode
+            ScreenShareService.resultData = result.data
+            startForegroundService(Intent(this, ScreenShareService::class.java))
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         identity = DeviceIdentity(this)
@@ -85,6 +98,9 @@ class MainActivity : ComponentActivity() {
 
     private fun setupServiceListeners() {
         val service = connectionService ?: return
+        service.onBinaryChunkReceived = { chunk ->
+            transferManager.handleIncomingBinaryChunk(chunk)
+        }
         service.onEnvelopeReceived = { env ->
             env.pairConfirm?.let { confirm ->
                 // Handled in pairing
@@ -122,6 +138,7 @@ class MainActivity : ComponentActivity() {
         var isConnected by remember { mutableStateOf(false) }
         var pairedMacName by remember { mutableStateOf("MacBook Pro") }
         var transfersList by remember { mutableStateOf(transferManager.activeTransfers.toList()) }
+        var isWebcamActive by remember { mutableStateOf(false) }
 
         transferManager.onTransfersUpdated = {
             transfersList = transferManager.activeTransfers.toList()
@@ -131,54 +148,65 @@ class MainActivity : ComponentActivity() {
             isConnected = connected
         }
 
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text("Continuity") }
-                )
-            },
-            bottomBar = {
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
-                        icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
-                        label = { Text("Home") }
+        if (isWebcamActive) {
+            ContinuityWebcamScreen(
+                macName = pairedMacName,
+                onClose = { isWebcamActive = false }
+            )
+        } else {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text("Continuity") }
                     )
-                    NavigationBarItem(
-                        selected = selectedTab == 1,
-                        onClick = { selectedTab = 1 },
-                        icon = { Icon(Icons.Default.QrCode, contentDescription = "Pairing") },
-                        label = { Text("Pairing") }
-                    )
-                    NavigationBarItem(
-                        selected = selectedTab == 2,
-                        onClick = { selectedTab = 2 },
-                        icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                        label = { Text("Settings") }
-                    )
+                },
+                bottomBar = {
+                    NavigationBar {
+                        NavigationBarItem(
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                            label = { Text("Home") }
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            icon = { Icon(Icons.Default.QrCode, contentDescription = "Pairing") },
+                            label = { Text("Pairing") }
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == 2,
+                            onClick = { selectedTab = 2 },
+                            icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                            label = { Text("Settings") }
+                        )
+                    }
                 }
-            }
-        ) { paddingValues ->
-            Surface(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-            ) {
-                when (selectedTab) {
-                    0 -> HomeScreen(
-                        isConnected = isConnected,
-                        connectedMacName = pairedMacName,
-                        onSendFileClicked = {
-                            filePickerLauncher.launch(arrayOf("*/*"))
-                        },
-                        onPushClipboardClicked = {
-                            connectionService?.let { clipboardManager.sendCurrentClipboard(it) }
-                        },
-                        onMirrorClicked = {},
-                        onCameraClicked = {},
-                        transfers = transfersList
-                    )
+            ) { paddingValues ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                ) {
+                    when (selectedTab) {
+                        0 -> HomeScreen(
+                            isConnected = isConnected,
+                            connectedMacName = pairedMacName,
+                            onSendFileClicked = {
+                                filePickerLauncher.launch(arrayOf("*/*"))
+                            },
+                            onPushClipboardClicked = {
+                                connectionService?.let { clipboardManager.sendCurrentClipboard(it) }
+                            },
+                            onMirrorClicked = {
+                                val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                                mediaProjectionLauncher.launch(mpManager.createScreenCaptureIntent())
+                            },
+                            onCameraClicked = {
+                                isWebcamActive = true
+                            },
+                            transfers = transfersList
+                        )
                     1 -> PairingScreen(
                         onPairWithUri = { uriStr ->
                             val qrData = pairingManager.parseQrCode(uriStr)
@@ -208,6 +236,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
 
     override fun onDestroy() {
         super.onDestroy()

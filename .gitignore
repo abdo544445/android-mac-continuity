@@ -17,6 +17,11 @@ local.properties
 .idea/
 *.iml
 
+# Build distributions
+dist/
+*.zip
+*.tar.gz
+
 # Python
 __pycache__/
 *.pyc

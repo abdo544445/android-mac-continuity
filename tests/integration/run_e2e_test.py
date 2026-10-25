@@ -27,11 +27,31 @@ def encode_frame(envelope: dict) -> bytes:
     header = MAGIC + bytes([0x00, 0x00, 0x00, 0x00]) + struct.pack(">I", len(json_bytes))
     return header + json_bytes
 
+def encode_binary_chunk(transfer_id: str, chunk_index: int, chunk_total: int, data: bytes) -> bytes:
+    id_bytes = transfer_id.encode("utf-8").ljust(36, b"\x00")[:36]
+    payload_len = 36 + 4 + 4 + len(data)
+    header = MAGIC + bytes([0x01, 0x00, 0x00, 0x00]) + struct.pack(">I", payload_len)
+    meta = id_bytes + struct.pack(">II", chunk_index, chunk_total)
+    return header + meta + data
+
 def read_frame(sock: socket.socket) -> dict:
-    magic = sock.recv(4)
+    magic = b""
+    while len(magic) < 4:
+        c = sock.recv(4 - len(magic))
+        if not c:
+            raise ConnectionError("Connection closed while reading magic")
+        magic += c
     if magic != MAGIC:
         raise ValueError(f"Invalid magic bytes: {magic}")
-    header = sock.recv(8)
+
+    header = b""
+    while len(header) < 8:
+        c = sock.recv(8 - len(header))
+        if not c:
+            raise ConnectionError("Connection closed while reading header")
+        header += c
+
+    flags = header[0]
     length = struct.unpack(">I", header[4:8])[0]
     payload = b""
     while len(payload) < length:
@@ -39,6 +59,19 @@ def read_frame(sock: socket.socket) -> dict:
         if not chunk:
             raise ConnectionError("Connection closed while reading frame")
         payload += chunk
+
+    if flags == 0x01:
+        tx_id = payload[:36].decode("utf-8").rstrip("\x00 ")
+        idx, tot = struct.unpack(">II", payload[36:44])
+        raw_data = payload[44:]
+        return {
+            "binaryChunk": {
+                "transferId": tx_id,
+                "chunkIndex": idx,
+                "chunkTotal": tot,
+                "data": raw_data
+            }
+        }
     return json.loads(payload.decode("utf-8"))
 
 def run_tests():
@@ -169,34 +202,23 @@ def run_tests():
     host_conn.sendall(encode_frame(accept))
     _ = read_frame(client_sock)
 
-    # Step 3.3: TransferChunks & Verification
+    # Step 3.3: High-Speed Raw Binary Chunks & Verification
     chunk_size = 8192
     chunks = [test_file_payload[i:i+chunk_size] for i in range(0, len(test_file_payload), chunk_size)]
     reassembled = b""
 
     for idx, c in enumerate(chunks):
-        c_hash = hashlib.sha256(c).hexdigest()
-        chunk_msg = {
-            "version": 1,
-            "requestId": f"chunk-{idx}",
-            "timestampMs": int(time.time() * 1000),
-            "senderDeviceId": "pixel-9-test",
-            "sessionToken": session_token,
-            "transferChunk": {
-                "transferId": tx_id,
-                "chunkIndex": idx,
-                "dataBase64": base64.b64encode(c).decode("ascii"),
-                "chunkSha256": c_hash
-            }
-        }
-        client_sock.sendall(encode_frame(chunk_msg))
+        bin_frame = encode_binary_chunk(tx_id, idx, len(chunks), c)
+        client_sock.sendall(bin_frame)
         host_chunk = read_frame(host_conn)
-        chunk_data = base64.b64decode(host_chunk["transferChunk"]["dataBase64"])
-        assert hashlib.sha256(chunk_data).hexdigest() == host_chunk["transferChunk"]["chunkSha256"]
-        reassembled += chunk_data
+        assert "binaryChunk" in host_chunk, "Expected raw binary chunk frame (flags=0x01)"
+        chunk_obj = host_chunk["binaryChunk"]
+        assert chunk_obj["transferId"] == tx_id
+        assert chunk_obj["chunkIndex"] == idx
+        reassembled += chunk_obj["data"]
 
     assert hashlib.sha256(reassembled).hexdigest() == file_sha256, "Total reassembled file hash mismatch!"
-    print(f"  ✅ Reassembled all {len(chunks)} chunks with verified SHA-256 checksum: {file_sha256[:16]}...")
+    print(f"  ✅ Reassembled all {len(chunks)} raw binary chunks with verified SHA-256 checksum: {file_sha256[:16]}...")
 
     # Step 3.4: TransferComplete
     complete = {
