@@ -242,11 +242,23 @@ public struct MirroringView: View {
         var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
         env.inputEvent = InputEvent(sessionId: "mirror", action: action)
         agent.activeSession?.send(envelope: env)
+
+        let keycode: Int?
+        switch action {
+        case .navBack: keycode = 4
+        case .navHome: keycode = 3
+        case .navRecents: keycode = 187
+        default: keycode = nil
+        }
+        if let kc = keycode {
+            advancedHost.executeAdbCommand(args: ["shell", "input", "keyevent", "\(kc)"])
+        }
     }
 
     private func sendKey(code: Int32) {
         var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
         env.inputEvent = InputEvent(sessionId: "mirror", action: .keyDown, keyCode: code)
         agent.activeSession?.send(envelope: env)
+        advancedHost.executeAdbCommand(args: ["shell", "input", "keyevent", "\(code)"])
     }
 }

@@ -11,9 +11,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
 import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -52,7 +52,12 @@ import com.continuity.ecosystem.ui.screens.SettingsScreen
 import com.continuity.ecosystem.ui.theme.ContinuityTheme
 import java.util.UUID
 
-class MainActivity : FragmentActivity() {
+class MainActivity : ComponentActivity() {
+
+    @Deprecated("Deprecated in Java")
+    override fun startActivityForResult(intent: Intent, requestCode: Int) {
+        super.startActivityForResult(intent, requestCode and 0xFFFF)
+    }
 
     private lateinit var identity: DeviceIdentity
     private lateinit var pairingManager: PairingManager

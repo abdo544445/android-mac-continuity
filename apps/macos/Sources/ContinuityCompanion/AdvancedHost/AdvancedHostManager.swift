@@ -218,8 +218,9 @@ public final class AdvancedHostManager: ObservableObject {
                 "--max-fps=60",
                 "--window-title=Continuity Mirror"
             ]
-            if let serial = serial {
-                args.append(contentsOf: ["-s", serial])
+            let targetSerial = serial ?? self.connectedAdbDevices.first
+            if let s = targetSerial, !s.isEmpty {
+                args.append(contentsOf: ["-s", s])
             }
             process.arguments = args
 
@@ -265,18 +266,27 @@ public final class AdvancedHostManager: ObservableObject {
         isMirroringActive = false
     }
 
-    /// Injects Android's native KEYCODE_PASTE (279) into the focused app on the mirrored phone/tablet.
-    public func sendPasteKeyevent() {
+    public func executeAdbCommand(args: [String]) {
         guard isAdbAvailable else { return }
         let path = adbPath
         let env = buildProcessEnvironment()
+        let target = connectedAdbDevices.first
+
         Task.detached {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: path)
             proc.environment = env
-            proc.arguments = ["shell", "input", "keyevent", "279"]
+            var finalArgs = args
+            if let t = target, !t.isEmpty, !finalArgs.contains("-s") {
+                finalArgs = ["-s", t] + finalArgs
+            }
+            proc.arguments = finalArgs
             try? proc.run()
-            proc.waitUntilExit()
         }
+    }
+
+    /// Injects Android's native KEYCODE_PASTE (279) into the focused app on the mirrored phone/tablet.
+    public func sendPasteKeyevent() {
+        executeAdbCommand(args: ["shell", "input", "keyevent", "279"])
     }
 }

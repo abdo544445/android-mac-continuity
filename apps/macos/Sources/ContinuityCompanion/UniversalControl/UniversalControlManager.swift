@@ -78,15 +78,9 @@ public final class UniversalControlManager: ObservableObject {
 
         // Also if ADB is available, tap directly
         if AdvancedHostManager.shared.isAdbAvailable {
-            let path = AdvancedHostManager.shared.adbPath
-            Task.detached {
-                let x = Int(normalizedX * 1280)
-                let y = Int(normalizedY * 800)
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: path)
-                proc.arguments = ["shell", "input", "tap", "\(x)", "\(y)"]
-                try? proc.run()
-            }
+            let x = Int(normalizedX * 1080)
+            let y = Int(normalizedY * 2400)
+            AdvancedHostManager.shared.executeAdbCommand(args: ["shell", "input", "tap", "\(x)", "\(y)"])
         }
     }
 
@@ -102,14 +96,8 @@ public final class UniversalControlManager: ObservableObject {
 
         // Also if ADB is available, write text directly
         if AdvancedHostManager.shared.isAdbAvailable {
-            let path = AdvancedHostManager.shared.adbPath
             let safeText = text.replacingOccurrences(of: " ", with: "%s")
-            Task.detached {
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: path)
-                proc.arguments = ["shell", "input", "text", safeText]
-                try? proc.run()
-            }
+            AdvancedHostManager.shared.executeAdbCommand(args: ["shell", "input", "text", safeText])
         }
     }
 }
