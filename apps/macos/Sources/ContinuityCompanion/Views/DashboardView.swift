@@ -151,6 +151,7 @@ public struct DashboardView: View {
             }
             Spacer()
             Button("Pair Phone") {
+                selectedTab = "Devices"
                 agent.isPairingSheetVisible = true
             }
             .buttonStyle(.borderedProminent)

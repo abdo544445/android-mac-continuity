@@ -18,9 +18,16 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
     public init() {}
 
     public func start() {
+        if isListening { return }
         do {
+            if AdvancedHostManager.shared.isAdbAvailable {
+                _ = AdvancedHostManager.shared.setupAdbReverseTunnel(port: 52400)
+            }
             let listener = ContinuityNetworkListener(port: 52400)
             listener.onNewSession = { [weak self] session in
+                guard let self = self else { return }
+                // Synchronously retain delegate before session.start() begins reading frames
+                session.setRetainedDelegate(self)
                 Task { @MainActor [weak self] in
                     self?.handleNewSession(session)
                 }
@@ -28,7 +35,7 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
             try listener.start()
             self.listener = listener
             self.isListening = true
-            print("[ConnectionAgent] Listener started successfully.")
+            print("[ConnectionAgent] Listener started successfully on port 52400.")
         } catch {
             print("[ConnectionAgent] Failed to start listener: \(error)")
         }
@@ -45,16 +52,31 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
 
     public func preparePairingSession() -> (qrString: String, pin: String) {
         self.pairingPin = CryptoManager.shared.generatePairingPin()
-        let deviceId = "mac-\(Host.current().localizedName?.replacingOccurrences(of: " ", with: "-").lowercased() ?? "macbook")"
+        let rawMacName = Host.current().localizedName ?? "Mac"
+        let deviceId = "mac-\(rawMacName.replacingOccurrences(of: " ", with: "-").lowercased())"
         let hostName = getLocalIPAddress()
         let pubKey = keyPair.publicKeyBase64
-        let exp = Int64(Date().addingTimeInterval(180).timeIntervalSince1970)
+        let exp = Int64(Date().addingTimeInterval(300).timeIntervalSince1970)
 
-        let qrString = "continuity://pair?v=1&id=\(deviceId)&name=macOS-Companion&host=\(hostName)&port=52400&pk=\(pubKey)&pin=\(pairingPin)&exp=\(exp)"
+        var comps = URLComponents()
+        comps.scheme = "continuity"
+        comps.host = "pair"
+        comps.queryItems = [
+            URLQueryItem(name: "v", value: "1"),
+            URLQueryItem(name: "id", value: deviceId),
+            URLQueryItem(name: "name", value: rawMacName),
+            URLQueryItem(name: "host", value: hostName),
+            URLQueryItem(name: "port", value: "52400"),
+            URLQueryItem(name: "pk", value: pubKey),
+            URLQueryItem(name: "pin", value: pairingPin),
+            URLQueryItem(name: "exp", value: "\(exp)")
+        ]
+        // Percent-encode '+' as '%2B' so Android Uri.getQueryParameter preserves Base64 '+' characters
+        let qrString = (comps.url?.absoluteString ?? "").replacingOccurrences(of: "+", with: "%2B")
         return (qrString, pairingPin)
     }
 
-    private func getLocalIPAddress() -> String {
+    public func getLocalIPAddress() -> String {
         var address = "127.0.0.1"
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return address }
@@ -71,9 +93,11 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
                                 &hostname, socklen_t(hostname.count),
                                 nil, socklen_t(0), NI_NUMERICHOST)
                     let ip = String(cString: hostname)
-                    if !ip.isEmpty && ip != "127.0.0.1" {
+                    if !ip.isEmpty && ip != "127.0.0.1" && !ip.starts(with: "169.254.") {
                         address = ip
-                        break
+                        if name == "en0" {
+                            break // Prefer primary en0 interface
+                        }
                     }
                 }
             }
@@ -83,9 +107,8 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
 
     private func handleNewSession(_ session: ContinuityNetworkSession) {
         self.activeSession = session
-        session.delegate = self
+        session.setRetainedDelegate(self)
         self.isConnected = true
-        DeviceRegistry.shared.updateConnectionStatus(deviceId: session.id, isConnected: true)
         startHeartbeats()
     }
 
@@ -93,6 +116,7 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
 
     public nonisolated func sessionDidConnect(_ session: ContinuityNetworkSession) {
         Task { @MainActor in
+            self.activeSession = session
             self.isConnected = true
             print("[ConnectionAgent] Session connected: \(session.id)")
         }
@@ -104,6 +128,9 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
                 self.isConnected = false
                 self.activeSession = nil
                 self.heartbeatTimer?.invalidate()
+                if let activeId = DeviceRegistry.shared.activeDevice?.deviceId {
+                    DeviceRegistry.shared.updateConnectionStatus(deviceId: activeId, isConnected: false)
+                }
                 print("[ConnectionAgent] Session disconnected: \(session.id), error: \(String(describing: error))")
             }
         }
@@ -124,27 +151,49 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
     // MARK: - Envelope Dispatch
 
     private func processEnvelope(_ envelope: ContinuityEnvelope, session: ContinuityNetworkSession) {
+        self.activeSession = session
+        self.isConnected = true
+
         if let pairReq = envelope.pairRequest {
             handlePairRequest(pairReq, envelope: envelope, session: session)
-        } else if let status = envelope.deviceStatus {
+        }
+        if let hello = envelope.deviceHello {
+            if DeviceRegistry.shared.pairedDevices.contains(where: { $0.deviceId == envelope.senderDeviceId }) {
+                DeviceRegistry.shared.updateConnectionStatus(deviceId: envelope.senderDeviceId, isConnected: true)
+            } else {
+                let device = PairedDevice(
+                    deviceId: envelope.senderDeviceId,
+                    name: hello.deviceModel,
+                    platform: .android,
+                    edition: .publicEdition,
+                    sessionToken: envelope.sessionToken ?? "tok_\(UUID().uuidString)",
+                    isConnected: true
+                )
+                DeviceRegistry.shared.addOrUpdateDevice(device)
+            }
+        }
+        if let status = envelope.deviceStatus {
+            DeviceRegistry.shared.updateConnectionStatus(deviceId: envelope.senderDeviceId, isConnected: true)
             DeviceRegistry.shared.updateDeviceStatus(deviceId: envelope.senderDeviceId, status: status)
-        } else if let offer = envelope.transferOffer {
+        }
+        if let offer = envelope.transferOffer {
             FileTransferEngine.shared.handleIncomingOffer(offer, session: session)
-        } else if let chunk = envelope.transferChunk {
+        }
+        if let chunk = envelope.transferChunk {
             FileTransferEngine.shared.handleIncomingChunk(chunk, session: session)
-        } else if let complete = envelope.transferComplete {
+        }
+        if let complete = envelope.transferComplete {
             FileTransferEngine.shared.handleIncomingComplete(complete)
-        } else if let clip = envelope.clipboardPayload {
+        }
+        if let clip = envelope.clipboardPayload {
             ClipboardBridge.shared.handleIncomingClipboard(clip)
-        } else if let notif = envelope.notificationEvent {
+        }
+        if let notif = envelope.notificationEvent {
             NotificationBridge.shared.handleIncomingNotification(notif)
-        } else if envelope.heartbeat != nil {
-            // Heartbeat received
         }
     }
 
     private func handlePairRequest(_ req: PairRequest, envelope: ContinuityEnvelope, session: ContinuityNetworkSession) {
-        // Derive session key
         let sessionToken = "tok_\(UUID().uuidString)"
         var authTag = ""
 
@@ -156,9 +205,12 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
             authTag = CryptoManager.shared.computeAuthTag(sessionKey: sessionKey, challenge: req.deviceId)
         }
 
+        let macName = Host.current().localizedName ?? "Mac"
+        let macId = "mac-\(macName.replacingOccurrences(of: " ", with: "-").lowercased())"
+
         let confirm = PairConfirm(
-            deviceId: "mac-companion",
-            deviceName: Host.current().localizedName ?? "MacBook Pro",
+            deviceId: macId,
+            deviceName: macName,
             platform: .macOS,
             ephemeralPublicKeyBase64: keyPair.publicKeyBase64,
             approved: true,
@@ -166,11 +218,10 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
             authTagBase64: authTag
         )
 
-        var replyEnv = ContinuityEnvelope(senderDeviceId: "mac-companion", sessionToken: sessionToken)
+        var replyEnv = ContinuityEnvelope(senderDeviceId: macId, sessionToken: sessionToken)
         replyEnv.pairConfirm = confirm
         session.send(envelope: replyEnv)
 
-        // Register device
         let paired = PairedDevice(
             deviceId: req.deviceId,
             name: req.deviceName,
@@ -180,6 +231,8 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
             isConnected: true
         )
         DeviceRegistry.shared.addOrUpdateDevice(paired)
+        self.isPairingSheetVisible = false
+        print("[ConnectionAgent] Paired and connected with \(req.deviceName) (\(req.deviceId))")
     }
 
     private func startHeartbeats() {

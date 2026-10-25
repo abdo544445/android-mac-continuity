@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import CoreImage.CIFilterBuiltins
 import ContinuityProtocol
 
@@ -57,7 +58,21 @@ public struct DevicesView: View {
                 }
             }
         }
-        .sheet(isPresented: $showPairingModal) {
+        .onAppear {
+            if agent.isPairingSheetVisible {
+                openPairingSheet()
+            }
+        }
+        .onChange(of: agent.isPairingSheetVisible) { newValue in
+            if newValue && !showPairingModal {
+                openPairingSheet()
+            } else if !newValue && showPairingModal {
+                showPairingModal = false
+            }
+        }
+        .sheet(isPresented: $showPairingModal, onDismiss: {
+            agent.isPairingSheetVisible = false
+        }) {
             pairingSheetView()
         }
     }
@@ -106,7 +121,7 @@ public struct DevicesView: View {
     }
 
     private func pairingSheetView() -> some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Text("Scan QR Code to Pair")
                 .font(.title2)
                 .fontWeight(.bold)
@@ -123,7 +138,7 @@ public struct DevicesView: View {
                     .frame(width: 220, height: 220)
                     .background(Color.white)
                     .cornerRadius(12)
-                    .padding(6)
+                    .padding(8)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
                             .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
@@ -133,28 +148,49 @@ public struct DevicesView: View {
                     .frame(width: 220, height: 220)
             }
 
-            VStack(spacing: 6) {
-                Text("Verification PIN")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(pairingPin)
-                    .font(.system(size: 28, weight: .bold, design: .monospaced))
-                    .tracking(6)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 10)
-            .background(Color(NSColor.controlBackgroundColor))
-            .cornerRadius(8)
+            HStack(spacing: 16) {
+                VStack(spacing: 4) {
+                    Text("Verification PIN")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(pairingPin)
+                        .font(.system(size: 24, weight: .bold, design: .monospaced))
+                        .tracking(4)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(8)
 
-            HStack {
+                VStack(spacing: 4) {
+                    Text("Mac IP & Port")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("\(agent.getLocalIPAddress()):52400")
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(8)
+            }
+
+            HStack(spacing: 12) {
+                Button("Copy Pairing URL") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(pairingUri, forType: .string)
+                }
+                .buttonStyle(.bordered)
+
                 Button("Done") {
                     showPairingModal = false
+                    agent.isPairingSheetVisible = false
                 }
                 .buttonStyle(.borderedProminent)
             }
         }
-        .padding(32)
-        .frame(width: 440, height: 480)
+        .padding(28)
+        .frame(width: 460, height: 500)
     }
 
     private func openPairingSheet() {
@@ -166,14 +202,15 @@ public struct DevicesView: View {
     }
 
     private func generateQRCode(from string: String) -> NSImage? {
+        let context = CIContext()
         let filter = CIFilter.qrCodeGenerator()
         filter.setValue(Data(string.utf8), forKey: "inputMessage")
         filter.setValue("M", forKey: "inputCorrectionLevel")
 
         guard let outputCIImage = filter.outputImage else { return nil }
-        let rep = NSCIImageRep(ciImage: outputCIImage)
-        let nsImage = NSImage(size: rep.size)
-        nsImage.addRepresentation(rep)
-        return nsImage
+        // Scale up 10x with nearest-neighbor so QR modules are razor-sharp for phone cameras
+        let transformed = outputCIImage.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
+        guard let cgImage = context.createCGImage(transformed, from: transformed.extent) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: transformed.extent.width, height: transformed.extent.height))
     }
 }

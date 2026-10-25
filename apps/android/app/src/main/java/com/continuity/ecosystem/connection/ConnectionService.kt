@@ -28,11 +28,15 @@ class ConnectionService : Service() {
     private var socket: Socket? = null
     private var outputStream: OutputStream? = null
     private var inputStream: InputStream? = null
+    private var telemetryJob: Job? = null
 
     private lateinit var identity: DeviceIdentity
-    private var host: String = "127.0.0.1"
-    private var port: Int = 52400
-    private var isConnected = false
+    var currentHost: String = "127.0.0.1"
+        private set
+    var currentPort: Int = 52400
+        private set
+    var currentConnectionState: Boolean = false
+        private set
     private var sessionToken: String? = null
     private val writeMutex = Mutex()
 
@@ -52,47 +56,86 @@ class ConnectionService : Service() {
         startForegroundNotification()
     }
 
-    fun connect(targetHost: String, targetPort: Int) {
-        this.host = targetHost
-        this.port = targetPort
+    fun connect(
+        targetHost: String,
+        targetPort: Int,
+        initialPairRequest: PairRequest? = null,
+        onError: ((String) -> Unit)? = null
+    ) {
+        this.currentHost = targetHost
+        this.currentPort = targetPort
 
         scope.launch {
             try {
-                disconnect()
-                Log.d("ConnectionService", "Connecting to $host:$port...")
-                val sock = Socket()
-                sock.tcpNoDelay = true
-                sock.sendBufferSize = 4 * 1024 * 1024
-                sock.receiveBufferSize = 4 * 1024 * 1024
-                sock.connect(InetSocketAddress(host, port), 5000)
+                closeSocketQuietly()
+                Log.d("ConnectionService", "Connecting to $targetHost:$targetPort...")
+
+                val sock = try {
+                    Socket().apply {
+                        tcpNoDelay = true
+                        sendBufferSize = 4 * 1024 * 1024
+                        receiveBufferSize = 4 * 1024 * 1024
+                        connect(InetSocketAddress(targetHost, targetPort), 4000)
+                    }
+                } catch (primaryErr: Exception) {
+                    if (targetHost != "127.0.0.1") {
+                        Log.w("ConnectionService", "Primary host $targetHost failed (${primaryErr.message}), trying USB ADB tunnel 127.0.0.1:$targetPort...")
+                        Socket().apply {
+                            tcpNoDelay = true
+                            sendBufferSize = 4 * 1024 * 1024
+                            receiveBufferSize = 4 * 1024 * 1024
+                            connect(InetSocketAddress("127.0.0.1", targetPort), 2500)
+                        }
+                    } else {
+                        throw primaryErr
+                    }
+                }
+
                 socket = sock
                 outputStream = sock.getOutputStream()
                 inputStream = sock.getInputStream()
-                isConnected = true
+                currentConnectionState = true
 
                 withContext(Dispatchers.Main) {
                     onConnectionStateChanged?.invoke(true)
                 }
 
-                // Send DeviceHello immediately
+                // 1. If pairing was initiated, send PairRequest immediately over the open socket
+                if (initialPairRequest != null) {
+                    val pairEnv = ContinuityEnvelope(
+                        senderDeviceId = identity.deviceId,
+                        pairRequest = initialPairRequest
+                    )
+                    writeMutex.withLock {
+                        outputStream?.let { ProtocolFraming.writeEnvelope(it, pairEnv) }
+                    }
+                }
+
+                // 2. Send DeviceHello immediately
                 val helloEnv = ContinuityEnvelope(
                     senderDeviceId = identity.deviceId,
+                    sessionToken = sessionToken,
                     deviceHello = DeviceHello(
                         appVersion = "1.0.0",
                         osVersion = "Android ${android.os.Build.VERSION.RELEASE}",
                         deviceModel = identity.deviceName
                     )
                 )
-                sendEnvelope(helloEnv)
+                writeMutex.withLock {
+                    outputStream?.let { ProtocolFraming.writeEnvelope(it, helloEnv) }
+                }
 
-                // Start telemetry loop
+                // 3. Start telemetry loop
                 startTelemetryJob()
 
-                // Start reading loop
-                readLoop()
+                // 4. Start reading loop
+                readLoop(sock)
             } catch (e: Exception) {
-                Log.e("ConnectionService", "Connection error: ${e.message}")
+                Log.e("ConnectionService", "Connection error: ${e.message}", e)
                 handleDisconnect()
+                withContext(Dispatchers.Main) {
+                    onError?.invoke(e.localizedMessage ?: "Could not reach Mac at $targetHost:$targetPort")
+                }
             }
         }
     }
@@ -127,10 +170,11 @@ class ConnectionService : Service() {
         }
     }
 
-    private fun readLoop() {
-        while (isConnected && inputStream != null) {
+    private fun readLoop(activeSock: Socket) {
+        val ins = inputStream ?: return
+        while (currentConnectionState && socket === activeSock && !activeSock.isClosed) {
             try {
-                val frame = ProtocolFraming.readFrame(inputStream!!)
+                val frame = ProtocolFraming.readFrame(ins)
                 if (frame != null) {
                     when (frame) {
                         is DecodedFrame.Envelope -> {
@@ -152,12 +196,15 @@ class ConnectionService : Service() {
                 break
             }
         }
-        handleDisconnect()
+        if (socket === activeSock) {
+            handleDisconnect()
+        }
     }
 
     private fun startTelemetryJob() {
-        scope.launch {
-            while (isConnected) {
+        telemetryJob?.cancel()
+        telemetryJob = scope.launch {
+            while (currentConnectionState && isActive) {
                 val status = collectDeviceStatus()
                 val env = ContinuityEnvelope(
                     senderDeviceId = identity.deviceId,
@@ -165,7 +212,7 @@ class ConnectionService : Service() {
                     deviceStatus = status
                 )
                 sendEnvelope(env)
-                delay(15000) // Send every 15 seconds
+                delay(15000)
             }
         }
     }
@@ -189,14 +236,19 @@ class ConnectionService : Service() {
         )
     }
 
-    fun disconnect() {
-        isConnected = false
+    private fun closeSocketQuietly() {
+        currentConnectionState = false
+        telemetryJob?.cancel()
         try {
             socket?.close()
         } catch (_: Exception) {}
         socket = null
         outputStream = null
         inputStream = null
+    }
+
+    fun disconnect() {
+        closeSocketQuietly()
         scope.launch(Dispatchers.Main) {
             onConnectionStateChanged?.invoke(false)
         }
@@ -211,16 +263,15 @@ class ConnectionService : Service() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(
             channelId,
-            "Continuity Status",
+            "Continuity Connection",
             NotificationManager.IMPORTANCE_LOW
         )
         nm.createNotificationChannel(channel)
 
         val notification = Notification.Builder(this, channelId)
-            .setContentTitle("Continuity Active")
-            .setContentText("Connected to Mac desktop workspace")
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setOngoing(true)
+            .setContentTitle("Continuity Companion")
+            .setContentText("Ready for local Mac connection")
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .build()
 
         startForeground(1001, notification)

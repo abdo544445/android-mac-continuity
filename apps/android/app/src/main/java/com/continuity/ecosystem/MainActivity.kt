@@ -4,10 +4,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
-import android.media.projection.MediaProjectionManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,9 +24,11 @@ import androidx.compose.ui.Modifier
 import com.continuity.ecosystem.clipboard.ClipboardSyncManager
 import com.continuity.ecosystem.connection.ConnectionService
 import com.continuity.ecosystem.core.DeviceIdentity
+import com.continuity.ecosystem.files.AndroidTransferItem
 import com.continuity.ecosystem.files.FileTransferManager
-import com.continuity.ecosystem.pairing.PairingManager
 import com.continuity.ecosystem.mirroring.ScreenShareService
+import com.continuity.ecosystem.pairing.PairingManager
+import com.continuity.ecosystem.pairing.PairingQrData
 import com.continuity.ecosystem.ui.screens.ContinuityWebcamScreen
 import com.continuity.ecosystem.ui.screens.HomeScreen
 import com.continuity.ecosystem.ui.screens.PairingScreen
@@ -41,18 +44,48 @@ class MainActivity : ComponentActivity() {
 
     private var connectionService: ConnectionService? = null
     private var isBound = false
+    private var pendingQrData: PairingQrData? = null
+
+    // Observable Compose UI states bound across service lifecycle
+    private var isConnectedState by mutableStateOf(false)
+    private var pairedMacNameState by mutableStateOf("")
+    private var transfersListState by mutableStateOf<List<AndroidTransferItem>>(emptyList())
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as ConnectionService.LocalBinder
-            connectionService = binder.getService()
+            val svc = binder.getService()
+            connectionService = svc
             isBound = true
-            setupServiceListeners()
+            isConnectedState = svc.currentConnectionState
+            setupServiceListeners(svc)
+
+            // If user had a pending QR scan before service finished binding, connect now
+            val pending = pendingQrData
+            if (pending != null && !svc.currentConnectionState) {
+                val pairReq = pairingManager.createPairRequest(pending)
+                svc.connect(
+                    targetHost = pending.host,
+                    targetPort = pending.port,
+                    initialPairRequest = pairReq,
+                    onError = { err ->
+                        Toast.makeText(this@MainActivity, "Connection error: $err", Toast.LENGTH_LONG).show()
+                    }
+                )
+            } else if (!svc.currentConnectionState) {
+                // Auto-reconnect if a Mac was previously paired
+                val savedHost = pairingManager.getPairedMacHost()
+                val savedPort = pairingManager.getPairedMacPort()
+                if (!savedHost.isNullOrEmpty()) {
+                    svc.connect(savedHost, savedPort)
+                }
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             connectionService = null
             isBound = false
+            isConnectedState = false
         }
     }
 
@@ -83,6 +116,14 @@ class MainActivity : ComponentActivity() {
         transferManager = FileTransferManager(this, identity)
         clipboardManager = ClipboardSyncManager(this)
 
+        // Load actual saved Mac name (empty string "" if no Mac is paired)
+        pairedMacNameState = pairingManager.getPairedMacName()
+        transfersListState = transferManager.activeTransfers.toList()
+
+        transferManager.onTransfersUpdated = {
+            transfersListState = transferManager.activeTransfers.toList()
+        }
+
         val serviceIntent = Intent(this, ConnectionService::class.java)
         startForegroundService(serviceIntent)
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
@@ -96,14 +137,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun setupServiceListeners() {
-        val service = connectionService ?: return
+    private fun setupServiceListeners(service: ConnectionService) {
+        service.onConnectionStateChanged = { connected ->
+            isConnectedState = connected
+        }
         service.onBinaryChunkReceived = { chunk ->
             transferManager.handleIncomingBinaryChunk(chunk)
         }
         service.onEnvelopeReceived = { env ->
             env.pairConfirm?.let { confirm ->
-                // Handled in pairing
+                val qr = pendingQrData
+                if (qr != null) {
+                    pairingManager.verifyAndSavePairing(confirm, qr)
+                } else {
+                    pairingManager.savePairedMacInfo(
+                        macId = confirm.deviceId,
+                        macName = confirm.deviceName,
+                        host = service.currentHost,
+                        port = service.currentPort,
+                        sessionToken = confirm.assignedSessionToken
+                    )
+                }
+                val resolvedName = confirm.deviceName.ifEmpty { qr?.macName ?: "Mac" }
+                pairedMacNameState = resolvedName
+                isConnectedState = true
+                Toast.makeText(this@MainActivity, "Connected to $resolvedName", Toast.LENGTH_SHORT).show()
             }
             env.transferOffer?.let { offer ->
                 transferManager.handleIncomingOffer(offer, service)
@@ -122,6 +180,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingShareIntent(intent: Intent) {
         if (intent.action == Intent.ACTION_SEND) {
+            @Suppress("DEPRECATION")
             val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
             uri?.let {
                 connectionService?.let { service ->
@@ -135,22 +194,11 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun MainAppScreen() {
         var selectedTab by remember { mutableIntStateOf(0) }
-        var isConnected by remember { mutableStateOf(false) }
-        var pairedMacName by remember { mutableStateOf("MacBook Pro") }
-        var transfersList by remember { mutableStateOf(transferManager.activeTransfers.toList()) }
         var isWebcamActive by remember { mutableStateOf(false) }
-
-        transferManager.onTransfersUpdated = {
-            transfersList = transferManager.activeTransfers.toList()
-        }
-
-        connectionService?.onConnectionStateChanged = { connected ->
-            isConnected = connected
-        }
 
         if (isWebcamActive) {
             ContinuityWebcamScreen(
-                macName = pairedMacName,
+                macName = pairedMacNameState,
                 onClose = { isWebcamActive = false }
             )
         } else {
@@ -190,8 +238,8 @@ class MainActivity : ComponentActivity() {
                 ) {
                     when (selectedTab) {
                         0 -> HomeScreen(
-                            isConnected = isConnected,
-                            connectedMacName = pairedMacName,
+                            isConnected = isConnectedState,
+                            connectedMacName = pairedMacNameState,
                             onSendFileClicked = {
                                 filePickerLauncher.launch(arrayOf("*/*"))
                             },
@@ -205,38 +253,59 @@ class MainActivity : ComponentActivity() {
                             onCameraClicked = {
                                 isWebcamActive = true
                             },
-                            transfers = transfersList
+                            transfers = transfersListState
                         )
-                    1 -> PairingScreen(
-                        onPairWithUri = { uriStr ->
-                            val qrData = pairingManager.parseQrCode(uriStr)
-                            if (qrData != null) {
-                                pairedMacName = qrData.macName
-                                connectionService?.connect(qrData.host, qrData.port)
-                                val pairReq = pairingManager.createPairRequest(qrData)
-                                connectionService?.sendEnvelope(
-                                    com.continuity.ecosystem.core.ContinuityEnvelope(
-                                        senderDeviceId = identity.deviceId,
-                                        pairRequest = pairReq
+                        1 -> PairingScreen(
+                            onPairWithUri = { uriStr ->
+                                val qrData = pairingManager.parseInputOrIp(uriStr)
+                                if (qrData != null) {
+                                    pendingQrData = qrData
+                                    pairedMacNameState = qrData.macName
+                                    pairingManager.savePairedMacInfo(
+                                        macId = qrData.macId,
+                                        macName = qrData.macName,
+                                        host = qrData.host,
+                                        port = qrData.port,
+                                        sessionToken = ""
                                     )
-                                )
-                                selectedTab = 0
+                                    val pairReq = pairingManager.createPairRequest(qrData)
+                                    connectionService?.connect(
+                                        targetHost = qrData.host,
+                                        targetPort = qrData.port,
+                                        initialPairRequest = pairReq,
+                                        onError = { err ->
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Connection error: $err",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    )
+                                    selectedTab = 0
+                                } else {
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "Invalid QR code or IP address",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
-                        }
-                    )
-                    2 -> SettingsScreen(
-                        pairedMacName = pairedMacName,
-                        onUnpairClicked = {
-                            pairingManager.unpair()
-                            connectionService?.disconnect()
-                            pairedMacName = ""
-                        }
-                    )
+                        )
+                        2 -> SettingsScreen(
+                            pairedMacName = pairedMacNameState,
+                            onUnpairClicked = {
+                                pendingQrData = null
+                                pairingManager.unpair()
+                                connectionService?.disconnect()
+                                pairedMacNameState = ""
+                                isConnectedState = false
+                            }
+                        )
+                    }
                 }
             }
         }
     }
-}
 
     override fun onDestroy() {
         super.onDestroy()
