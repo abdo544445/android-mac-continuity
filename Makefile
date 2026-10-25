@@ -1,4 +1,6 @@
-.PHONY: all build-macos build-android install-android test-macos test-android test-e2e run-companion open-mac reveal run-cli run-relay clean help
+.PHONY: all build-macos build-android install-android test-macos test-android test-e2e run-companion open-mac reveal run-cli run-relay release clean help
+
+VERSION ?= $(shell cat VERSION 2>/dev/null | tr -d '[:space:]')
 
 all: build-macos build-android test-macos test-android test-e2e
 
@@ -48,6 +50,10 @@ test-e2e:
 run-relay:
 	@echo "📡 Launching E2E Encrypted Relay Server..."
 	python3 services/optional-relay/relay_server.py
+
+release:
+	@chmod +x ./scripts/release.sh
+	./scripts/release.sh "$(VERSION)"
 
 clean:
 	@echo "🧹 Cleaning build artifacts..."

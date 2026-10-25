@@ -110,5 +110,28 @@ fun SettingsScreen(
                 }
             }
         }
+
+        // App Version Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "App Version",
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "v1.0.1 (Build 2)",
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }
