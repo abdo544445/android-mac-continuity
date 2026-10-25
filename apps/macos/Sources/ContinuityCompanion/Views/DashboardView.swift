@@ -5,6 +5,7 @@ import ContinuityProtocol
 public struct DashboardView: View {
     @ObservedObject var registry = DeviceRegistry.shared
     @ObservedObject var agent = ConnectionAgent.shared
+    @ObservedObject var discovery = LanDiscoveryService.shared
     @ObservedObject var transferEngine = FileTransferEngine.shared
     @ObservedObject var clipboardBridge = ClipboardBridge.shared
     @Binding var selectedTab: String
@@ -21,6 +22,50 @@ public struct DashboardView: View {
                     connectedDeviceCard(device: device)
                 } else {
                     disconnectedCard()
+                }
+
+                // Auto-Discovered Nearby Devices on Local Network
+                if !discovery.discoveredPeers.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Label("Nearby Devices on Local Network", systemImage: "dot.radiowaves.left.and.right")
+                                .font(.headline)
+                                .foregroundColor(.blue)
+                            Spacer()
+                            Text("Auto-detected via Wi-Fi / LAN")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        ForEach(discovery.discoveredPeers) { peer in
+                            HStack(spacing: 14) {
+                                Image(systemName: "ipad.and.iphone")
+                                    .font(.system(size: 26))
+                                    .foregroundColor(.blue)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(peer.deviceName)
+                                        .font(.system(size: 15, weight: .semibold))
+                                    Text("IP: \(peer.ip) • Ready to Pair")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Button {
+                                    agent.initiatePairingWithDiscoveredPeer(peer)
+                                } label: {
+                                    Label("Pair with PIN", systemImage: "checkmark.shield.fill")
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            .padding(14)
+                            .background(Color(NSColor.controlBackgroundColor))
+                            .cornerRadius(10)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.blue.opacity(0.25), lineWidth: 1)
+                            )
+                        }
+                    }
                 }
 
                 // Quick Actions Grid

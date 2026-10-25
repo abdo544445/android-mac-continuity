@@ -7,7 +7,10 @@ public final class ClipboardBridge: ObservableObject {
     public static let shared = ClipboardBridge()
 
     @Published public var lastSharedText: String = ""
-    @Published public var autoSyncEnabled: Bool = false
+    @Published public var lastSharedImage: NSImage? = nil
+    @Published public var lastSharedType: String = "None"
+    @Published public var autoSyncEnabled: Bool = true
+    @Published public var autoPasteOnMirror: Bool = true
     @Published public var filterSensitiveData: Bool = true
 
     private var lastChangeCount: Int = 0
@@ -21,7 +24,9 @@ public final class ClipboardBridge: ObservableObject {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.checkPasteboard(session: session)
+                guard let self = self else { return }
+                let activeSess = session ?? ConnectionAgent.shared.activeSession
+                self.checkPasteboard(session: activeSess)
             }
         }
     }
@@ -31,23 +36,53 @@ public final class ClipboardBridge: ObservableObject {
         timer = nil
     }
 
-    public func sendCurrentClipboard(session: ContinuityNetworkSession?) {
-        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
+    /// Sends current Mac pasteboard (either Image or Text) to Android, and optionally injects KEYCODE_PASTE (279).
+    public func sendCurrentClipboard(session: ContinuityNetworkSession?, triggerPaste: Bool = false) {
+        let activeSess = session ?? ConnectionAgent.shared.activeSession
+        if let (pngData, nsImage) = extractPasteboardImagePng() {
+            sendImagePng(pngData, previewImage: nsImage, session: activeSess, triggerPaste: triggerPaste)
             return
         }
-        sendText(text, session: session)
+        if let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
+            sendText(text, session: activeSess, triggerPaste: triggerPaste)
+        }
+    }
+
+    /// Sends an arbitrary image file dropped onto the Mirror view directly to Android clipboard and pastes it.
+    public func sendDroppedImageFile(url: URL, session: ContinuityNetworkSession?, triggerPaste: Bool = true) {
+        guard let image = NSImage(contentsOf: url),
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            return
+        }
+        let activeSess = session ?? ConnectionAgent.shared.activeSession
+        sendImagePng(pngData, previewImage: image, session: activeSess, triggerPaste: triggerPaste)
     }
 
     public func handleIncomingClipboard(_ payload: ClipboardPayload) {
-        guard let data = Data(base64Encoded: payload.dataBase64),
-              let text = String(data: data, encoding: .utf8) else {
+        guard let data = Data(base64Encoded: payload.dataBase64) else {
             return
         }
 
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        self.lastChangeCount = NSPasteboard.general.changeCount
-        self.lastSharedText = text
+        if payload.mimeType.starts(with: "image/") {
+            if let image = NSImage(data: data) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.writeObjects([image])
+                self.lastChangeCount = NSPasteboard.general.changeCount
+                self.lastSharedImage = image
+                self.lastSharedType = "Image from Android (\(data.count / 1024) KB)"
+            }
+            return
+        }
+
+        if let text = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            self.lastChangeCount = NSPasteboard.general.changeCount
+            self.lastSharedText = text
+            self.lastSharedType = "Text from Android"
+        }
     }
 
     private func checkPasteboard(session: ContinuityNetworkSession?) {
@@ -69,13 +104,78 @@ public final class ClipboardBridge: ObservableObject {
             }
         }
 
+        let shouldAutoPaste = autoPasteOnMirror && AdvancedHostManager.shared.isMirroringActive
+
+        // 1. Check if an image (screenshot, copied graphic, or image file) is on the pasteboard
+        if let (pngData, nsImage) = extractPasteboardImagePng() {
+            sendImagePng(pngData, previewImage: nsImage, session: session, triggerPaste: shouldAutoPaste)
+            return
+        }
+
+        // 2. Otherwise check for text
         if let string = NSPasteboard.general.string(forType: .string), !string.isEmpty {
-            sendText(string, session: session)
+            sendText(string, session: session, triggerPaste: shouldAutoPaste)
         }
     }
 
-    private func sendText(_ text: String, session: ContinuityNetworkSession?) {
-        lastSharedText = text
+    private func extractPasteboardImagePng() -> (Data, NSImage)? {
+        let pb = NSPasteboard.general
+
+        // Direct PNG data on pasteboard (e.g., macOS screenshots Cmd+Ctrl+Shift+4)
+        if let pngData = pb.data(forType: .png), let img = NSImage(data: pngData) {
+            return (pngData, img)
+        }
+
+        // TIFF data on pasteboard (Safari, Preview, Finder copy)
+        if let tiffData = pb.data(forType: .tiff),
+           let bitmap = NSBitmapImageRep(data: tiffData),
+           let pngData = bitmap.representation(using: .png, properties: [:]),
+           let img = NSImage(data: pngData) {
+            return (pngData, img)
+        }
+
+        // File URL pointing to an image file copied in Finder
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let firstUrl = urls.first {
+            let ext = firstUrl.pathExtension.lowercased()
+            if ["png", "jpg", "jpeg", "webp", "heic", "tiff", "bmp"].contains(ext),
+               let img = NSImage(contentsOf: firstUrl),
+               let tiff = img.tiffRepresentation,
+               let bitmap = NSBitmapImageRep(data: tiff),
+               let pngData = bitmap.representation(using: .png, properties: [:]) {
+                return (pngData, img)
+            }
+        }
+
+        return nil
+    }
+
+    private func sendImagePng(_ pngData: Data, previewImage: NSImage, session: ContinuityNetworkSession?, triggerPaste: Bool) {
+        self.lastSharedImage = previewImage
+        self.lastSharedType = "Image (\(pngData.count / 1024) KB)"
+
+        let payload = ClipboardPayload(
+            clipId: UUID().uuidString,
+            dataBase64: pngData.base64EncodedString(),
+            mimeType: "image/png"
+        )
+        var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
+        env.clipboardPayload = payload
+        session?.send(envelope: env)
+        ConnectionAgent.shared.debugLog("Sent image clipboard to Android (\(pngData.count) bytes, triggerPaste=\(triggerPaste))")
+
+        if triggerPaste {
+            // Allow 400ms for Android to write the image into MediaStore & ClipboardManager, then fire KEYCODE_PASTE (279)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                AdvancedHostManager.shared.sendPasteKeyevent()
+            }
+        }
+    }
+
+    private func sendText(_ text: String, session: ContinuityNetworkSession?, triggerPaste: Bool) {
+        self.lastSharedText = text
+        self.lastSharedType = "Text (\(text.count) chars)"
+
         let payload = ClipboardPayload(
             clipId: UUID().uuidString,
             dataBase64: Data(text.utf8).base64EncodedString(),
@@ -84,5 +184,12 @@ public final class ClipboardBridge: ObservableObject {
         var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
         env.clipboardPayload = payload
         session?.send(envelope: env)
+        ConnectionAgent.shared.debugLog("Sent text clipboard to Android (\(text.count) chars, triggerPaste=\(triggerPaste))")
+
+        if triggerPaste {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                AdvancedHostManager.shared.sendPasteKeyevent()
+            }
+        }
     }
 }

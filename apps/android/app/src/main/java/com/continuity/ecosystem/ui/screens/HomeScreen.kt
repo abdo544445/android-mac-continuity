@@ -15,12 +15,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.continuity.ecosystem.connection.DiscoveredPeer
 import com.continuity.ecosystem.files.AndroidTransferItem
 
 @Composable
 fun HomeScreen(
     isConnected: Boolean,
     connectedMacName: String,
+    discoveredPeers: List<DiscoveredPeer>,
+    onPairPeerClicked: (DiscoveredPeer) -> Unit,
     onSendFileClicked: () -> Unit,
     onPushClipboardClicked: () -> Unit,
     onMirrorClicked: () -> Unit,
@@ -60,10 +63,66 @@ fun HomeScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = if (isConnected) "Connected via Local Wi-Fi" else "Waiting for Mac on local network",
+                            text = if (isConnected) "Connected via Local Wi-Fi / USB-C" else "Waiting for Mac on local network",
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+            }
+        }
+
+        // Auto-Discovered Nearby Macs on Local Network
+        if (!isConnected && discoveredPeers.isNotEmpty()) {
+            item {
+                Text(
+                    text = "Nearby Macs on Local Network",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    discoveredPeers.forEach { peer ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.LaptopMac,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = peer.deviceName,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 16.sp
+                                        )
+                                        Text(
+                                            text = "${peer.ip}:${peer.tcpPort} • Auto-Detected",
+                                            fontSize = 12.sp,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                }
+                                Button(onClick = { onPairPeerClicked(peer) }) {
+                                    Text("Pair (PIN)")
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -78,36 +78,37 @@ public final class FileTransferEngine: ObservableObject {
         )
         transfers.insert(transfer, at: 0)
 
-        // Asynchronously stream without Base64 overhead
+        // Asynchronously stream chunk-by-chunk with TCP backpressure
         Task.detached {
-            guard let fileData = try? Data(contentsOf: fileURL) else {
+            guard let readHandle = try? FileHandle(forReadingFrom: fileURL) else {
                 await self.updateStatus(transferId: transferId, status: .failed, error: "Failed to read file")
                 return
             }
+            defer { try? readHandle.close() }
 
-            let checksum = CryptoManager.shared.sha256Hex(data: fileData)
-            let totalChunks = Int32((fileData.count + effectiveChunkSize - 1) / effectiveChunkSize)
+            let totalChunks = Int32((Int(fileSize) + effectiveChunkSize - 1) / max(effectiveChunkSize, 1))
 
             let offer = TransferOffer(
                 transferId: transferId,
                 fileName: fileName,
                 fileSizeBytes: fileSize,
-                sha256Checksum: checksum,
+                sha256Checksum: "streamed-binary",
                 totalChunks: totalChunks,
                 chunkSizeBytes: Int64(effectiveChunkSize)
             )
 
             var offerEnvelope = ContinuityEnvelope(senderDeviceId: "macos-companion")
             offerEnvelope.transferOffer = offer
-            session?.send(envelope: offerEnvelope)
+            try? await session?.sendAsync(envelope: offerEnvelope)
 
-            // Send raw binary chunks without Base64 or artificial sleep pauses
-            var offset = 0
+            var offset: Int64 = 0
             var chunkIdx: Int32 = 0
 
-            while offset < fileData.count {
-                let thisChunkSize = min(effectiveChunkSize, fileData.count - offset)
-                let chunkBytes = fileData.subdata(in: offset..<(offset + thisChunkSize))
+            while offset < fileSize {
+                let thisChunkSize = Int(min(Int64(effectiveChunkSize), fileSize - offset))
+                guard let chunkBytes = try? readHandle.read(upToCount: thisChunkSize), !chunkBytes.isEmpty else {
+                    break
+                }
 
                 let rawChunk = RawBinaryChunk(
                     transferId: transferId,
@@ -116,13 +117,17 @@ public final class FileTransferEngine: ObservableObject {
                     data: chunkBytes
                 )
 
-                session?.send(binaryChunk: rawChunk)
+                do {
+                    try await session?.sendAsync(binaryChunk: rawChunk)
+                } catch {
+                    await self.updateStatus(transferId: transferId, status: .failed, error: error.localizedDescription)
+                    return
+                }
 
-                offset += thisChunkSize
+                offset += Int64(chunkBytes.count)
                 chunkIdx += 1
 
-                let transferred = Int64(offset)
-                await self.updateProgress(transferId: transferId, bytesTransferred: transferred)
+                await self.updateProgress(transferId: transferId, bytesTransferred: offset)
             }
 
             let complete = TransferComplete(
@@ -133,7 +138,7 @@ public final class FileTransferEngine: ObservableObject {
             )
             var completeEnvelope = ContinuityEnvelope(senderDeviceId: "macos-companion")
             completeEnvelope.transferComplete = complete
-            session?.send(envelope: completeEnvelope)
+            try? await session?.sendAsync(envelope: completeEnvelope)
 
             await self.updateStatus(transferId: transferId, status: .completed)
         }

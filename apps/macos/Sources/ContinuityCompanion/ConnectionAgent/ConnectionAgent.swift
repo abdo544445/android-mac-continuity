@@ -1,5 +1,19 @@
 import Foundation
+import AppKit
 import ContinuityProtocol
+
+public struct PendingPairProposal: Identifiable, Equatable {
+    public var id: String { deviceId }
+    public let deviceId: String
+    public let deviceName: String
+    public let pin: String
+    public let remotePublicKeyBase64: String
+    public let session: ContinuityNetworkSession?
+
+    public static func == (lhs: PendingPairProposal, rhs: PendingPairProposal) -> Bool {
+        lhs.deviceId == rhs.deviceId && lhs.pin == rhs.pin && lhs.deviceName == rhs.deviceName
+    }
+}
 
 @MainActor
 public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
@@ -10,12 +24,31 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
     @Published public var isConnected: Bool = false
     @Published public var pairingPin: String = ""
     @Published public var isPairingSheetVisible: Bool = false
+    @Published public var pendingPairProposal: PendingPairProposal? = nil
+    @Published public var liveMirrorFrame: NSImage? = nil
+    @Published public var shouldNavigateToMirror: Bool = false
 
     private var listener: ContinuityNetworkListener?
     private var heartbeatTimer: Timer?
     private var keyPair = CryptoManager.shared.generateKeyPair()
 
     public init() {}
+
+    public nonisolated func debugLog(_ message: String) {
+        let line = "[\(ISO8601DateFormatter().string(from: Date()))] [ConnectionAgent] \(message)\n"
+        print(line, terminator: "")
+        fflush(stdout)
+        if let data = line.data(using: .utf8) {
+            let logURL = URL(fileURLWithPath: "/tmp/continuity_macos.log")
+            if let handle = try? FileHandle(forWritingTo: logURL) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            } else {
+                try? data.write(to: logURL)
+            }
+        }
+    }
 
     public func start() {
         if isListening { return }
@@ -35,13 +68,15 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
             try listener.start()
             self.listener = listener
             self.isListening = true
-            print("[ConnectionAgent] Listener started successfully on port 52400.")
+            LanDiscoveryService.shared.start(publicKeyBase64: keyPair.publicKeyBase64)
+            debugLog("Listener started successfully on port 52400 (IP: \(getLocalIPAddress())).")
         } catch {
-            print("[ConnectionAgent] Failed to start listener: \(error)")
+            debugLog("Failed to start listener: \(error)")
         }
     }
 
     public func stop() {
+        LanDiscoveryService.shared.stop()
         listener?.stop()
         activeSession?.stop()
         heartbeatTimer?.invalidate()
@@ -143,6 +178,18 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
     }
 
     public nonisolated func session(_ session: ContinuityNetworkSession, didReceiveBinaryChunk chunk: RawBinaryChunk) {
+        if chunk.transferId == "00000000-0000-0000-0000-000000MIRROR" {
+            if let img = NSImage(data: chunk.data) {
+                Task { @MainActor in
+                    if self.liveMirrorFrame == nil {
+                        self.shouldNavigateToMirror = true
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    self.liveMirrorFrame = img
+                }
+            }
+            return
+        }
         Task { @MainActor in
             FileTransferEngine.shared.handleIncomingBinaryChunk(chunk, session: session)
         }
@@ -157,10 +204,14 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
         if let pairReq = envelope.pairRequest {
             handlePairRequest(pairReq, envelope: envelope, session: session)
         }
+        if let pairConf = envelope.pairConfirm {
+            handleIncomingPairConfirm(pairConf, envelope: envelope, session: session)
+        }
         if let hello = envelope.deviceHello {
             if DeviceRegistry.shared.pairedDevices.contains(where: { $0.deviceId == envelope.senderDeviceId }) {
                 DeviceRegistry.shared.updateConnectionStatus(deviceId: envelope.senderDeviceId, isConnected: true)
-            } else {
+            } else if pendingPairProposal == nil {
+                // Only auto-register on DeviceHello if not waiting on a Bluetooth-style PIN confirmation
                 let device = PairedDevice(
                     deviceId: envelope.senderDeviceId,
                     name: hello.deviceModel,
@@ -191,18 +242,146 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
         if let notif = envelope.notificationEvent {
             NotificationBridge.shared.handleIncomingNotification(notif)
         }
+        if let sessReq = envelope.sessionRequest, sessReq.type == .screenMirror {
+            debugLog("Android requested Screen Mirror session!")
+            self.shouldNavigateToMirror = true
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        if let sessStop = envelope.sessionStop {
+            debugLog("Android stopped session: \(sessStop.reason)")
+            self.liveMirrorFrame = nil
+        }
+    }
+
+    public func requestWirelessMirrorFromAndroid() {
+        var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
+        env.sessionRequest = SessionRequest(
+            type: .screenMirror,
+            width: 1280,
+            height: 720,
+            targetFps: 25,
+            codec: "JPEG"
+        )
+        activeSession?.send(envelope: env)
+        debugLog("Sent SessionRequest(.screenMirror) to Android")
+    }
+
+    public func initiatePairingWithDiscoveredPeer(_ peer: DiscoveredPeer) {
+        let pin = CryptoManager.shared.generatePairingPin()
+        self.pairingPin = pin
+        self.pendingPairProposal = PendingPairProposal(
+            deviceId: peer.deviceId,
+            deviceName: peer.deviceName,
+            pin: pin,
+            remotePublicKeyBase64: peer.publicKeyBase64,
+            session: activeSession
+        )
+        LanDiscoveryService.shared.sendPairInvite(
+            to: peer,
+            pin: pin,
+            publicKeyBase64: keyPair.publicKeyBase64
+        )
     }
 
     private func handlePairRequest(_ req: PairRequest, envelope: ContinuityEnvelope, session: ContinuityNetworkSession) {
+        debugLog("Received PairRequest from \(req.deviceName) (\(req.deviceId)) with PIN \(req.pairingPin)")
+
+        // If the user explicitly opened the QR code modal and scanned that exact PIN, complete immediately
+        if isPairingSheetVisible && req.pairingPin == pairingPin && pendingPairProposal == nil {
+            finalizePairing(
+                deviceId: req.deviceId,
+                deviceName: req.deviceName,
+                pin: req.pairingPin,
+                remotePublicKeyBase64: req.ephemeralPublicKeyBase64,
+                session: session
+            )
+            return
+        }
+
+        // Otherwise, show Bluetooth-style 6-digit PIN comparison modal on Mac (and update session reference)
+        self.pairingPin = req.pairingPin
+        self.pendingPairProposal = PendingPairProposal(
+            deviceId: req.deviceId,
+            deviceName: req.deviceName,
+            pin: req.pairingPin,
+            remotePublicKeyBase64: req.ephemeralPublicKeyBase64,
+            session: session
+        )
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func handleIncomingPairConfirm(_ confirm: PairConfirm, envelope: ContinuityEnvelope, session: ContinuityNetworkSession) {
+        if !confirm.approved {
+            debugLog("Remote device \(confirm.deviceName) declined pairing.")
+            self.pendingPairProposal = nil
+            return
+        }
+        debugLog("Remote device \(confirm.deviceName) confirmed 6-digit PIN pairing! Finalizing on Mac...")
+        let pin = pendingPairProposal?.pin ?? pairingPin
+        let devId = confirm.deviceId.isEmpty ? (pendingPairProposal?.deviceId ?? envelope.senderDeviceId) : confirm.deviceId
+        let devName = confirm.deviceName.isEmpty ? (pendingPairProposal?.deviceName ?? "Android Device") : confirm.deviceName
+        let pubKey = confirm.ephemeralPublicKeyBase64.isEmpty ? (pendingPairProposal?.remotePublicKeyBase64 ?? "") : confirm.ephemeralPublicKeyBase64
+
+        finalizePairing(
+            deviceId: devId,
+            deviceName: devName,
+            pin: pin,
+            remotePublicKeyBase64: pubKey,
+            session: session
+        )
+    }
+
+    public func confirmPendingPairing() {
+        guard let proposal = pendingPairProposal else { return }
+        guard let session = proposal.session ?? activeSession else {
+            debugLog("Cannot confirm pairing yet: waiting for peer TCP socket connection...")
+            return
+        }
+        finalizePairing(
+            deviceId: proposal.deviceId,
+            deviceName: proposal.deviceName,
+            pin: proposal.pin,
+            remotePublicKeyBase64: proposal.remotePublicKeyBase64,
+            session: session
+        )
+    }
+
+    public func declinePendingPairing() {
+        if let proposal = pendingPairProposal, let session = proposal.session ?? activeSession {
+            let macName = Host.current().localizedName ?? "Mac"
+            let macId = "mac-\(macName.replacingOccurrences(of: " ", with: "-").lowercased())"
+            let rejectConfirm = PairConfirm(
+                deviceId: macId,
+                deviceName: macName,
+                platform: .macOS,
+                ephemeralPublicKeyBase64: keyPair.publicKeyBase64,
+                approved: false,
+                assignedSessionToken: "",
+                authTagBase64: ""
+            )
+            var replyEnv = ContinuityEnvelope(senderDeviceId: macId)
+            replyEnv.pairConfirm = rejectConfirm
+            session.send(envelope: replyEnv)
+        }
+        self.pendingPairProposal = nil
+    }
+
+    private func finalizePairing(
+        deviceId: String,
+        deviceName: String,
+        pin: String,
+        remotePublicKeyBase64: String,
+        session: ContinuityNetworkSession
+    ) {
         let sessionToken = "tok_\(UUID().uuidString)"
         var authTag = ""
 
         if let sessionKey = try? CryptoManager.shared.deriveSessionKey(
             localPrivateKey: keyPair.privateKey,
-            remotePublicKeyBase64: req.ephemeralPublicKeyBase64,
-            pin: req.pairingPin
+            remotePublicKeyBase64: remotePublicKeyBase64,
+            pin: pin
         ) {
-            authTag = CryptoManager.shared.computeAuthTag(sessionKey: sessionKey, challenge: req.deviceId)
+            authTag = CryptoManager.shared.computeAuthTag(sessionKey: sessionKey, challenge: deviceId)
         }
 
         let macName = Host.current().localizedName ?? "Mac"
@@ -223,23 +402,29 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
         session.send(envelope: replyEnv)
 
         let paired = PairedDevice(
-            deviceId: req.deviceId,
-            name: req.deviceName,
-            platform: req.platform,
-            edition: req.edition,
+            deviceId: deviceId,
+            name: deviceName,
+            platform: .android,
+            edition: .publicEdition,
             sessionToken: sessionToken,
             isConnected: true
         )
         DeviceRegistry.shared.addOrUpdateDevice(paired)
+        self.pendingPairProposal = nil
         self.isPairingSheetVisible = false
-        print("[ConnectionAgent] Paired and connected with \(req.deviceName) (\(req.deviceId))")
+        self.isConnected = true
+        debugLog("Paired and connected with \(deviceName) (\(deviceId))")
     }
 
     private func startHeartbeats() {
         heartbeatTimer?.invalidate()
         heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self = self, let session = self.activeSession else { return }
+                guard let self = self else { return }
+                if AdvancedHostManager.shared.isAdbAvailable {
+                    _ = AdvancedHostManager.shared.setupAdbReverseTunnel(port: 52400)
+                }
+                guard let session = self.activeSession else { return }
                 var env = ContinuityEnvelope(senderDeviceId: "mac-companion")
                 env.heartbeat = Heartbeat(sequenceNumber: 1)
                 session.send(envelope: env)

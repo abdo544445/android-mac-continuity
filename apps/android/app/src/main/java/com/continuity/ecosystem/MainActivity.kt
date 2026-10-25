@@ -12,18 +12,26 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.continuity.ecosystem.clipboard.ClipboardSyncManager
 import com.continuity.ecosystem.connection.ConnectionService
-import com.continuity.ecosystem.core.DeviceIdentity
+import com.continuity.ecosystem.connection.DiscoveredPeer
+import com.continuity.ecosystem.connection.LanDiscoveryManager
+import com.continuity.ecosystem.core.*
 import com.continuity.ecosystem.files.AndroidTransferItem
 import com.continuity.ecosystem.files.FileTransferManager
 import com.continuity.ecosystem.mirroring.ScreenShareService
@@ -34,6 +42,7 @@ import com.continuity.ecosystem.ui.screens.HomeScreen
 import com.continuity.ecosystem.ui.screens.PairingScreen
 import com.continuity.ecosystem.ui.screens.SettingsScreen
 import com.continuity.ecosystem.ui.theme.ContinuityTheme
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
@@ -41,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var pairingManager: PairingManager
     private lateinit var transferManager: FileTransferManager
     private lateinit var clipboardManager: ClipboardSyncManager
+    private lateinit var lanDiscoveryManager: LanDiscoveryManager
 
     private var connectionService: ConnectionService? = null
     private var isBound = false
@@ -50,6 +60,8 @@ class MainActivity : ComponentActivity() {
     private var isConnectedState by mutableStateOf(false)
     private var pairedMacNameState by mutableStateOf("")
     private var transfersListState by mutableStateOf<List<AndroidTransferItem>>(emptyList())
+    private var discoveredPeersState by mutableStateOf<List<DiscoveredPeer>>(emptyList())
+    private var pendingPinConfirmState by mutableStateOf<Pair<DiscoveredPeer, String>?>(null)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -115,6 +127,15 @@ class MainActivity : ComponentActivity() {
         pairingManager = PairingManager(this, identity)
         transferManager = FileTransferManager(this, identity)
         clipboardManager = ClipboardSyncManager(this)
+        lanDiscoveryManager = LanDiscoveryManager(this, identity)
+
+        lanDiscoveryManager.onPeersUpdated = { peers ->
+            discoveredPeersState = peers
+        }
+        lanDiscoveryManager.onPairInviteReceived = { peer, pin ->
+            startBluetoothStylePairing(peer, customPin = pin)
+        }
+        lanDiscoveryManager.start()
 
         // Load actual saved Mac name (empty string "" if no Mac is paired)
         pairedMacNameState = pairingManager.getPairedMacName()
@@ -146,6 +167,13 @@ class MainActivity : ComponentActivity() {
         }
         service.onEnvelopeReceived = { env ->
             env.pairConfirm?.let { confirm ->
+                if (!confirm.approved) {
+                    pendingPinConfirmState = null
+                    pendingQrData = null
+                    isConnectedState = false
+                    Toast.makeText(this@MainActivity, "Pairing declined", Toast.LENGTH_SHORT).show()
+                    return@let
+                }
                 val qr = pendingQrData
                 if (qr != null) {
                     pairingManager.verifyAndSavePairing(confirm, qr)
@@ -160,8 +188,9 @@ class MainActivity : ComponentActivity() {
                 }
                 val resolvedName = confirm.deviceName.ifEmpty { qr?.macName ?: "Mac" }
                 pairedMacNameState = resolvedName
+                pendingPinConfirmState = null
                 isConnectedState = true
-                Toast.makeText(this@MainActivity, "Connected to $resolvedName", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Paired & Connected to $resolvedName", Toast.LENGTH_SHORT).show()
             }
             env.transferOffer?.let { offer ->
                 transferManager.handleIncomingOffer(offer, service)
@@ -174,6 +203,12 @@ class MainActivity : ComponentActivity() {
             }
             env.clipboardPayload?.let { clip ->
                 clipboardManager.handleIncomingClipboard(clip)
+            }
+            env.sessionRequest?.let { req ->
+                if (req.type == SessionType.SESSION_SCREEN_MIRROR) {
+                    val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    mediaProjectionLauncher.launch(mpManager.createScreenCaptureIntent())
+                }
             }
         }
     }
@@ -190,11 +225,146 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun startBluetoothStylePairing(peer: DiscoveredPeer, customPin: String? = null) {
+        val pin = customPin ?: String.format("%06d", (100000..999999).random())
+        val qrData = PairingQrData(
+            macId = peer.deviceId,
+            macName = peer.deviceName,
+            host = peer.ip,
+            port = peer.tcpPort,
+            publicKeyBase64 = peer.publicKeyBase64.ifEmpty { identity.getPublicKeyBase64() },
+            pin = pin,
+            expiresAt = System.currentTimeMillis() / 1000 + 300
+        )
+        pendingQrData = qrData
+        pendingPinConfirmState = peer to pin
+
+        val pairReq = pairingManager.createPairRequest(qrData)
+        connectionService?.connect(
+            targetHost = peer.ip,
+            targetPort = peer.tcpPort,
+            initialPairRequest = pairReq,
+            onError = { err ->
+                pendingPinConfirmState = null
+                Toast.makeText(this@MainActivity, "Connection error: $err", Toast.LENGTH_LONG).show()
+            }
+        )
+    }
+
+    private fun confirmPendingPinPairing() {
+        val (peer, _) = pendingPinConfirmState ?: return
+        val sessionTok = "tok_${UUID.randomUUID()}"
+        pairingManager.savePairedMacInfo(
+            macId = peer.deviceId,
+            macName = peer.deviceName,
+            host = peer.ip,
+            port = peer.tcpPort,
+            sessionToken = sessionTok
+        )
+        pairedMacNameState = peer.deviceName
+        isConnectedState = true
+        pendingPinConfirmState = null
+
+        val confirmMsg = PairConfirm(
+            deviceId = identity.deviceId,
+            deviceName = identity.deviceName,
+            platform = DevicePlatform.PLATFORM_ANDROID,
+            ephemeralPublicKeyBase64 = identity.getPublicKeyBase64(),
+            approved = true,
+            assignedSessionToken = sessionTok,
+            authTagBase64 = ""
+        )
+        connectionService?.sendEnvelope(
+            ContinuityEnvelope(
+                senderDeviceId = identity.deviceId,
+                sessionToken = sessionTok,
+                pairConfirm = confirmMsg
+            )
+        )
+        Toast.makeText(this@MainActivity, "Paired & Connected to ${peer.deviceName}", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun declinePendingPinPairing() {
+        val confirmMsg = PairConfirm(
+            deviceId = identity.deviceId,
+            deviceName = identity.deviceName,
+            platform = DevicePlatform.PLATFORM_ANDROID,
+            ephemeralPublicKeyBase64 = identity.getPublicKeyBase64(),
+            approved = false,
+            assignedSessionToken = "",
+            authTagBase64 = ""
+        )
+        connectionService?.sendEnvelope(
+            ContinuityEnvelope(
+                senderDeviceId = identity.deviceId,
+                pairConfirm = confirmMsg
+            )
+        )
+        pendingPinConfirmState = null
+        pendingQrData = null
+        connectionService?.disconnect()
+    }
+
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun MainAppScreen() {
         var selectedTab by remember { mutableIntStateOf(0) }
         var isWebcamActive by remember { mutableStateOf(false) }
+
+        pendingPinConfirmState?.let { (peer, pin) ->
+            val formattedPin = if (pin.length == 6) "${pin.substring(0, 3)} ${pin.substring(3, 6)}" else pin
+            AlertDialog(
+                onDismissRequest = { declinePendingPinPairing() },
+                title = {
+                    Text(
+                        text = "Bluetooth-Style Pairing",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Confirm that this 6-digit PIN matches the code shown on ${peer.deviceName}:",
+                            textAlign = TextAlign.Center,
+                            fontSize = 14.sp
+                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = formattedPin,
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+                            )
+                        }
+                        Text(
+                            text = "You can accept & confirm from either this Android device or your Mac.",
+                            textAlign = TextAlign.Center,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { confirmPendingPinPairing() }) {
+                        Text("Accept & Pair")
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { declinePendingPinPairing() }) {
+                        Text("Decline")
+                    }
+                }
+            )
+        }
 
         if (isWebcamActive) {
             ContinuityWebcamScreen(
@@ -240,6 +410,10 @@ class MainActivity : ComponentActivity() {
                         0 -> HomeScreen(
                             isConnected = isConnectedState,
                             connectedMacName = pairedMacNameState,
+                            discoveredPeers = discoveredPeersState,
+                            onPairPeerClicked = { peer ->
+                                startBluetoothStylePairing(peer)
+                            },
                             onSendFileClicked = {
                                 filePickerLauncher.launch(arrayOf("*/*"))
                             },
@@ -256,6 +430,10 @@ class MainActivity : ComponentActivity() {
                             transfers = transfersListState
                         )
                         1 -> PairingScreen(
+                            discoveredPeers = discoveredPeersState,
+                            onPairPeerClicked = { peer ->
+                                startBluetoothStylePairing(peer)
+                            },
                             onPairWithUri = { uriStr ->
                                 val qrData = pairingManager.parseInputOrIp(uriStr)
                                 if (qrData != null) {
@@ -309,6 +487,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (::lanDiscoveryManager.isInitialized) {
+            lanDiscoveryManager.stop()
+        }
         if (isBound) {
             unbindService(connection)
             isBound = false

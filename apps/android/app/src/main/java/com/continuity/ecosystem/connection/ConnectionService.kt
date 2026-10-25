@@ -22,6 +22,11 @@ import java.net.Socket
 
 class ConnectionService : Service() {
 
+    companion object {
+        @Volatile
+        var activeInstance: ConnectionService? = null
+    }
+
     private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -52,6 +57,7 @@ class ConnectionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         identity = DeviceIdentity(this)
         startForegroundNotification()
     }
@@ -68,26 +74,26 @@ class ConnectionService : Service() {
         scope.launch {
             try {
                 closeSocketQuietly()
-                Log.d("ConnectionService", "Connecting to $targetHost:$targetPort...")
+                Log.w("ContinuityDebug", "Connecting to Mac (target=$targetHost:$targetPort, usbTunnel=127.0.0.1:$targetPort)...")
 
+                // Try USB-C ADB Fast-Path (127.0.0.1) FIRST if plugged in via USB cable, then Wi-Fi LAN IP
                 val sock = try {
                     Socket().apply {
                         tcpNoDelay = true
                         sendBufferSize = 4 * 1024 * 1024
                         receiveBufferSize = 4 * 1024 * 1024
-                        connect(InetSocketAddress(targetHost, targetPort), 4000)
+                        connect(InetSocketAddress("127.0.0.1", targetPort), 400)
+                    }.also {
+                        Log.w("ContinuityDebug", "Connected via high-speed USB-C tunnel (127.0.0.1:$targetPort)")
                     }
-                } catch (primaryErr: Exception) {
-                    if (targetHost != "127.0.0.1") {
-                        Log.w("ConnectionService", "Primary host $targetHost failed (${primaryErr.message}), trying USB ADB tunnel 127.0.0.1:$targetPort...")
-                        Socket().apply {
-                            tcpNoDelay = true
-                            sendBufferSize = 4 * 1024 * 1024
-                            receiveBufferSize = 4 * 1024 * 1024
-                            connect(InetSocketAddress("127.0.0.1", targetPort), 2500)
-                        }
-                    } else {
-                        throw primaryErr
+                } catch (_: Exception) {
+                    Socket().apply {
+                        tcpNoDelay = true
+                        sendBufferSize = 4 * 1024 * 1024
+                        receiveBufferSize = 4 * 1024 * 1024
+                        connect(InetSocketAddress(targetHost, targetPort), 4000)
+                    }.also {
+                        Log.w("ContinuityDebug", "Connected via Wi-Fi LAN ($targetHost:$targetPort)")
                     }
                 }
 
@@ -170,6 +176,20 @@ class ConnectionService : Service() {
         }
     }
 
+    suspend fun sendBinaryChunkSync(chunk: RawBinaryChunk) {
+        try {
+            writeMutex.withLock {
+                outputStream?.let {
+                    ProtocolFraming.writeBinaryChunk(it, chunk)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ContinuityDebug", "Send chunk error: ${e.message}")
+            handleDisconnect()
+            throw e
+        }
+    }
+
     private fun readLoop(activeSock: Socket) {
         val ins = inputStream ?: return
         while (currentConnectionState && socket === activeSock && !activeSock.isClosed) {
@@ -184,15 +204,15 @@ class ConnectionService : Service() {
                             }
                         }
                         is DecodedFrame.BinaryChunk -> {
-                            scope.launch(Dispatchers.Main) {
-                                onBinaryChunkReceived?.invoke(frame.chunk)
-                            }
+                            // Process binary file chunks directly on the IO thread to preserve order and avoid Main thread stalls
+                            onBinaryChunkReceived?.invoke(frame.chunk)
                         }
                     }
                 } else {
                     break
                 }
             } catch (e: Exception) {
+                Log.w("ContinuityDebug", "Socket readLoop ended: ${e.message}")
                 break
             }
         }
@@ -279,6 +299,9 @@ class ConnectionService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         disconnect()
         scope.cancel()
     }

@@ -63,11 +63,35 @@ public final class ContinuityNetworkSession: @unchecked Sendable {
         }
     }
 
+    public func sendAsync(envelope: ContinuityEnvelope) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            send(envelope: envelope) { error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
+    }
+
     public func send(binaryChunk: RawBinaryChunk, completion: (@Sendable (Error?) -> Void)? = nil) {
         let data = frameEncoder.encode(binaryChunk: binaryChunk)
         connection.send(content: data, completion: .contentProcessed { error in
             completion?(error)
         })
+    }
+
+    public func sendAsync(binaryChunk: RawBinaryChunk) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            send(binaryChunk: binaryChunk) { error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
     }
 
     private func receiveNext() {

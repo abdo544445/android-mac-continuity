@@ -1,14 +1,21 @@
 package com.continuity.ecosystem.files
 
+import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.util.Log
+import android.widget.Toast
 import com.continuity.ecosystem.connection.ConnectionService
 import com.continuity.ecosystem.connection.RawBinaryChunk
 import com.continuity.ecosystem.core.*
 import kotlinx.coroutines.*
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.UUID
 
@@ -32,6 +39,7 @@ class FileTransferManager(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     val activeTransfers = mutableListOf<AndroidTransferItem>()
     var onTransfersUpdated: (() -> Unit)? = null
+    private var lastUiUpdateMs: Long = 0L
 
     companion object {
         fun adaptiveChunkSize(fileSizeBytes: Long): Int {
@@ -46,9 +54,7 @@ class FileTransferManager(
     fun sendFile(fileUri: Uri, service: ConnectionService) {
         scope.launch {
             val fileName = getFileName(fileUri) ?: "file.bin"
-            val fileBytes = context.contentResolver.openInputStream(fileUri)?.use { it.readBytes() } ?: return@launch
-            val fileSize = fileBytes.size.toLong()
-            val checksum = identity.sha256Hex(fileBytes)
+            val fileSize = getFileSize(fileUri)
             val transferId = UUID.randomUUID().toString()
             val effectiveChunkSize = adaptiveChunkSize(fileSize)
 
@@ -63,12 +69,12 @@ class FileTransferManager(
             }
             withContext(Dispatchers.Main) { onTransfersUpdated?.invoke() }
 
-            val totalChunks = ((fileBytes.size + effectiveChunkSize - 1) / effectiveChunkSize)
+            val totalChunks = if (fileSize > 0) ((fileSize + effectiveChunkSize - 1) / effectiveChunkSize).toInt() else 1
             val offer = TransferOffer(
                 transferId = transferId,
                 fileName = fileName,
                 fileSizeBytes = fileSize,
-                sha256Checksum = checksum,
+                sha256Checksum = "streamed-binary",
                 totalChunks = totalChunks,
                 chunkSizeBytes = effectiveChunkSize.toLong()
             )
@@ -78,25 +84,34 @@ class FileTransferManager(
                 transferOffer = offer
             ))
 
-            var offset = 0
+            var offset = 0L
             var chunkIndex = 0
+            val buffer = ByteArray(effectiveChunkSize)
 
-            while (offset < fileBytes.size) {
-                val len = minOf(effectiveChunkSize, fileBytes.size - offset)
-                val chunk = fileBytes.copyOfRange(offset, offset + len)
+            context.contentResolver.openInputStream(fileUri)?.use { input ->
+                while (true) {
+                    var bytesReadTotal = 0
+                    while (bytesReadTotal < effectiveChunkSize) {
+                        val r = input.read(buffer, bytesReadTotal, effectiveChunkSize - bytesReadTotal)
+                        if (r == -1) break
+                        bytesReadTotal += r
+                    }
+                    if (bytesReadTotal <= 0) break
 
-                val rawChunk = RawBinaryChunk(
-                    transferId = transferId,
-                    chunkIndex = chunkIndex,
-                    chunkTotal = totalChunks,
-                    data = chunk
-                )
-                service.sendBinaryChunk(rawChunk)
+                    val chunk = if (bytesReadTotal == effectiveChunkSize) buffer.clone() else buffer.copyOfRange(0, bytesReadTotal)
+                    val rawChunk = RawBinaryChunk(
+                        transferId = transferId,
+                        chunkIndex = chunkIndex,
+                        chunkTotal = totalChunks,
+                        data = chunk
+                    )
+                    service.sendBinaryChunkSync(rawChunk)
 
-                offset += len
-                chunkIndex++
-                item.bytesTransferred = offset.toLong()
-                withContext(Dispatchers.Main) { onTransfersUpdated?.invoke() }
+                    offset += bytesReadTotal
+                    chunkIndex++
+                    item.bytesTransferred = offset
+                    notifyProgressThrottled()
+                }
             }
 
             service.sendEnvelope(ContinuityEnvelope(
@@ -105,16 +120,18 @@ class FileTransferManager(
                     transferId = transferId,
                     verified = true,
                     finalPathBasename = fileName,
-                    bytesWritten = fileSize
+                    bytesWritten = offset
                 )
             ))
 
             item.isCompleted = true
+            item.bytesTransferred = offset
             withContext(Dispatchers.Main) { onTransfersUpdated?.invoke() }
         }
     }
 
     fun handleIncomingOffer(offer: TransferOffer, service: ConnectionService) {
+        Log.w("ContinuityDebug", "Incoming file offer: ${offer.fileName} (${offer.fileSizeBytes} bytes)")
         val item = AndroidTransferItem(
             id = offer.transferId,
             fileName = offer.fileName,
@@ -122,6 +139,7 @@ class FileTransferManager(
             isIncoming = true
         )
         synchronized(activeTransfers) {
+            activeTransfers.removeAll { it.id == offer.transferId }
             activeTransfers.add(0, item)
         }
         onTransfersUpdated?.invoke()
@@ -144,11 +162,10 @@ class FileTransferManager(
                 it.bytesTransferred += chunk.data.size
             }
         }
-        scope.launch(Dispatchers.Main) { onTransfersUpdated?.invoke() }
+        notifyProgressThrottled()
     }
 
     fun handleIncomingChunk(chunk: TransferChunk) {
-        // Fallback for JSON Base64 chunks if received
         val chunkBytes = Base64.decode(chunk.dataBase64, Base64.NO_WRAP)
         val computedHash = identity.sha256Hex(chunkBytes)
         if (computedHash != chunk.chunkSha256) return
@@ -163,36 +180,99 @@ class FileTransferManager(
                 it.bytesTransferred += chunkBytes.size
             }
         }
-        scope.launch(Dispatchers.Main) { onTransfersUpdated?.invoke() }
+        notifyProgressThrottled()
     }
 
     fun handleIncomingComplete(complete: TransferComplete) {
-        val rawName = File(complete.finalPathBasename).name
-        val fileName = if (rawName.isEmpty()) "file.bin" else rawName
-        val dir = File(context.filesDir, "transfers").also { it.mkdirs() }
-        val tempFile = File(dir, "${complete.transferId}.part")
+        scope.launch(Dispatchers.IO) {
+            val rawName = File(complete.finalPathBasename).name
+            val fileName = if (rawName.isEmpty()) "file.bin" else rawName
+            val dir = File(context.filesDir, "transfers").also { it.mkdirs() }
+            val tempFile = File(dir, "${complete.transferId}.part")
 
-        var destination = File(dir, fileName)
-        var counter = 1
-        val baseName = destination.nameWithoutExtension
-        val ext = destination.extension
+            var savedToDownloads = false
+            if (tempFile.exists()) {
+                savedToDownloads = exportToPublicDownloads(tempFile, fileName)
+                if (savedToDownloads) {
+                    tempFile.delete()
+                } else {
+                    val destination = File(dir, fileName)
+                    tempFile.renameTo(destination)
+                }
+            }
 
-        while (destination.exists()) {
-            val newName = if (ext.isEmpty()) "$baseName ($counter)" else "$baseName ($counter).$ext"
-            destination = File(dir, newName)
-            counter++
-        }
-
-        tempFile.renameTo(destination)
-
-        synchronized(activeTransfers) {
-            val item = activeTransfers.find { it.id == complete.transferId }
-            item?.let {
-                it.isCompleted = true
-                it.bytesTransferred = complete.bytesWritten
+            synchronized(activeTransfers) {
+                val item = activeTransfers.find { it.id == complete.transferId }
+                item?.let {
+                    it.isCompleted = true
+                    it.bytesTransferred = complete.bytesWritten
+                }
+            }
+            Log.w("ContinuityDebug", "Transfer complete: $fileName (exportedToDownloads=$savedToDownloads)")
+            withContext(Dispatchers.Main) {
+                onTransfersUpdated?.invoke()
+                Toast.makeText(
+                    context,
+                    "Saved to Downloads/Continuity: $fileName",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
-        scope.launch(Dispatchers.Main) { onTransfersUpdated?.invoke() }
+    }
+
+    private fun exportToPublicDownloads(sourceFile: File, fileName: String): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Continuity")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
+                resolver.openOutputStream(uri)?.use { out ->
+                    FileInputStream(sourceFile).use { input ->
+                        input.copyTo(out, bufferSize = 1024 * 1024)
+                    }
+                }
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                true
+            } else {
+                val pubDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    "Continuity"
+                ).also { it.mkdirs() }
+                val dest = File(pubDir, fileName)
+                sourceFile.copyTo(dest, overwrite = true)
+                true
+            }
+        } catch (e: Exception) {
+            Log.e("ContinuityDebug", "Failed to export to public Downloads: ${e.message}", e)
+            false
+        }
+    }
+
+    private fun notifyProgressThrottled() {
+        val now = System.currentTimeMillis()
+        if (now - lastUiUpdateMs >= 150L) {
+            lastUiUpdateMs = now
+            scope.launch(Dispatchers.Main) { onTransfersUpdated?.invoke() }
+        }
+    }
+
+    private fun getFileSize(uri: Uri): Long {
+        if (uri.scheme == "content") {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (idx != -1 && !cursor.isNull(idx)) return cursor.getLong(idx)
+                }
+            }
+        }
+        return context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: 0L
     }
 
     private fun getFileName(uri: Uri): String? {

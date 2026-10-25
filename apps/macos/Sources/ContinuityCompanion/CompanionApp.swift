@@ -52,6 +52,15 @@ struct CompanionApp: App {
                 detailView(for: selectedTab)
             }
             .frame(minWidth: 880, minHeight: 580)
+            .onChange(of: agent.shouldNavigateToMirror) { newVal in
+                if newVal {
+                    selectedTab = "Mirroring"
+                    agent.shouldNavigateToMirror = false
+                }
+            }
+            .sheet(item: $agent.pendingPairProposal) { proposal in
+                BluetoothPinConfirmSheet(proposal: proposal)
+            }
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
@@ -91,5 +100,78 @@ struct CompanionApp: App {
         default:
             DashboardView(selectedTab: $selectedTab)
         }
+    }
+}
+
+struct BluetoothPinConfirmSheet: View {
+    let proposal: PendingPairProposal
+    @ObservedObject var agent = ConnectionAgent.shared
+
+    var formattedPin: String {
+        if proposal.pin.count == 6 {
+            let prefix = proposal.pin.prefix(3)
+            let suffix = proposal.pin.suffix(3)
+            return "\(prefix) \(suffix)"
+        }
+        return proposal.pin
+    }
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "person.line.dotted.person.fill")
+                .font(.system(size: 46))
+                .foregroundColor(.blue)
+
+            Text("Bluetooth-Style Pairing Request")
+                .font(.title2)
+                .fontWeight(.bold)
+
+            Text("Confirm that this 6-digit PIN matches the code displayed on **\(proposal.deviceName)**:")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
+            Text(formattedPin)
+                .font(.system(size: 40, weight: .heavy, design: .monospaced))
+                .tracking(6)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 16)
+                .background(Color.blue.opacity(0.12))
+                .foregroundColor(.primary)
+                .cornerRadius(14)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(Color.blue.opacity(0.4), lineWidth: 1.5)
+                )
+
+            Text("You can confirm this pairing from either your Mac or your Android device.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
+            HStack(spacing: 16) {
+                Button(role: .cancel) {
+                    agent.declinePendingPairing()
+                } label: {
+                    Text("Decline")
+                        .frame(width: 120)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button {
+                    agent.confirmPendingPairing()
+                } label: {
+                    Text("Accept & Pair")
+                        .fontWeight(.semibold)
+                        .frame(width: 150)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
+            .padding(.top, 8)
+        }
+        .padding(32)
+        .frame(width: 440)
     }
 }

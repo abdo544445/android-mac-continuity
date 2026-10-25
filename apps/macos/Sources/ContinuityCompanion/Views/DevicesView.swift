@@ -6,6 +6,7 @@ import ContinuityProtocol
 public struct DevicesView: View {
     @ObservedObject var registry = DeviceRegistry.shared
     @ObservedObject var agent = ConnectionAgent.shared
+    @ObservedObject var discovery = LanDiscoveryService.shared
     @State private var qrImage: NSImage?
     @State private var pairingPin: String = ""
     @State private var pairingUri: String = ""
@@ -17,12 +18,12 @@ public struct DevicesView: View {
         VStack(spacing: 0) {
             // Header Bar
             HStack {
-                Text("Paired Devices")
+                Text("Paired & Nearby Devices")
                     .font(.title2)
                     .fontWeight(.bold)
                 Spacer()
                 Button(action: { openPairingSheet() }) {
-                    Label("Pair New Android Phone", systemImage: "plus.circle.fill")
+                    Label("Pair via QR Code", systemImage: "qrcode")
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -31,29 +32,49 @@ public struct DevicesView: View {
 
             Divider()
 
-            if registry.pairedDevices.isEmpty {
-                VStack(spacing: 14) {
-                    Image(systemName: "qrcode.viewfinder")
-                        .font(.system(size: 54))
-                        .foregroundColor(.secondary)
-                    Text("No Paired Devices")
-                        .font(.headline)
-                    Text("Pair your Android phone securely by scanning a short-lived QR code. No Google or Apple accounts required.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 380)
-
-                    Button("Pair Phone Now") {
-                        openPairingSheet()
+            List {
+                Section("Nearby Devices on Local Network (Auto-Detected)") {
+                    if discovery.discoveredPeers.isEmpty {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Scanning local Wi-Fi network for Android devices...")
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 6)
+                    } else {
+                        ForEach(discovery.discoveredPeers) { peer in
+                            HStack(spacing: 16) {
+                                Image(systemName: "ipad.and.iphone")
+                                    .font(.system(size: 28))
+                                    .foregroundColor(.blue)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(peer.deviceName)
+                                        .font(.system(size: 15, weight: .semibold))
+                                    Text("\(peer.ip) • Available on Local Network")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Button("Pair with 6-Digit PIN") {
+                                    agent.initiatePairingWithDiscoveredPeer(peer)
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            .padding(.vertical, 6)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
-                    ForEach(registry.pairedDevices) { device in
-                        deviceRow(device: device)
+
+                Section("Trusted Paired Devices") {
+                    if registry.pairedDevices.isEmpty {
+                        Text("No paired devices yet. Select a nearby device above or click 'Pair via QR Code'.")
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 6)
+                    } else {
+                        ForEach(registry.pairedDevices) { device in
+                            deviceRow(device: device)
+                        }
                     }
                 }
             }
