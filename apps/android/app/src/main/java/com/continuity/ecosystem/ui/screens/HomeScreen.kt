@@ -28,6 +28,9 @@ fun HomeScreen(
     onPushClipboardClicked: () -> Unit,
     onMirrorClicked: () -> Unit,
     onCameraClicked: () -> Unit,
+    onExtendedDisplayClicked: (() -> Unit)? = null,
+    onHandoffClicked: (() -> Unit)? = null,
+    onFolderSyncClicked: (() -> Unit)? = null,
     transfers: List<AndroidTransferItem>
 ) {
     LazyColumn(
@@ -171,6 +174,26 @@ fun HomeScreen(
                     modifier = Modifier.weight(1f),
                     onClick = onCameraClicked
                 )
+            }
+            if (isConnected) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    QuickActionButton(
+                        title = "Mac Display",
+                        icon = Icons.Default.DesktopWindows,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onExtendedDisplayClicked?.invoke() }
+                    )
+                    QuickActionButton(
+                        title = "Folder Sync",
+                        icon = Icons.Default.Sync,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onFolderSyncClicked?.invoke() }
+                    )
+                }
             }
         }
 

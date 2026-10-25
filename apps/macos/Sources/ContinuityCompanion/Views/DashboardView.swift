@@ -8,6 +8,12 @@ public struct DashboardView: View {
     @ObservedObject var discovery = LanDiscoveryService.shared
     @ObservedObject var transferEngine = FileTransferEngine.shared
     @ObservedObject var clipboardBridge = ClipboardBridge.shared
+    @ObservedObject var callRelay = CallRelayBridge.shared
+    @ObservedObject var biometricBridge = BiometricAuthBridge.shared
+    @ObservedObject var handoffBridge = HandoffBridge.shared
+    @ObservedObject var folderSync = FolderSyncEngine.shared
+    @ObservedObject var extDisplay = ExtendedDisplayManager.shared
+    @ObservedObject var universalControl = UniversalControlManager.shared
     @Binding var selectedTab: String
 
     public init(selectedTab: Binding<String>) {
@@ -22,6 +28,51 @@ public struct DashboardView: View {
                     connectedDeviceCard(device: device)
                 } else {
                     disconnectedCard()
+                }
+
+                // Incoming Call Banner
+                if let call = callRelay.activeCall {
+                    HStack(spacing: 16) {
+                        Image(systemName: "phone.arrow.down.left.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white)
+                            .padding(10)
+                            .background(Color.green)
+                            .clipShape(Circle())
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Incoming Call from Device")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(call.callerName)
+                                .font(.headline)
+                            if !call.callerNumber.isEmpty && call.callerNumber != call.callerName {
+                                Text(call.callerNumber)
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        Spacer()
+
+                        Button("Silence") {
+                            callRelay.respondToCall(callId: call.callId, action: "MUTE", session: agent.activeSession)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Decline") {
+                            callRelay.respondToCall(callId: call.callId, action: "REJECT", session: agent.activeSession)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                    }
+                    .padding()
+                    .background(Color.green.opacity(0.12))
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.green, lineWidth: 1.5)
+                    )
                 }
 
                 // Auto-Discovered Nearby Devices on Local Network
@@ -83,8 +134,20 @@ public struct DashboardView: View {
                     actionButton(title: "Mirror Screen", icon: "rectangle.inset.filled.and.cursorarrow", color: .purple) {
                         selectedTab = "Mirroring"
                     }
-                    actionButton(title: "Use Camera", icon: "camera.fill", color: .orange) {
-                        selectedTab = "Camera"
+                    actionButton(title: "Extended Display", icon: "display.2", color: .indigo) {
+                        selectedTab = "ExtendedDisplay"
+                    }
+                    actionButton(title: "Handoff Active Tab", icon: "safari.fill", color: .cyan) {
+                        handoffBridge.pushCurrentMacBrowserTab(session: agent.activeSession)
+                    }
+                    actionButton(title: "Biometric Unlock", icon: "touchid", color: .pink) {
+                        biometricBridge.requestBiometricUnlock(session: agent.activeSession)
+                    }
+                    actionButton(title: "Folder Sync", icon: "arrow.triangle.2.circlepath", color: .teal) {
+                        folderSync.startSync(session: agent.activeSession)
+                    }
+                    actionButton(title: "Device Storage", icon: "folder.badge.gearshape", color: .orange) {
+                        selectedTab = "Storage"
                     }
                 }
 

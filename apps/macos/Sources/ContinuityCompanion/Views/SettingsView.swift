@@ -78,10 +78,36 @@ public struct SettingsView: View {
                         }
                     }
 
-                    Button("Re-detect Tools") {
-                        advancedHost.detectTooling()
+                    HStack(spacing: 12) {
+                        Button("Re-detect Tools") {
+                            advancedHost.detectTooling()
+                        }
+                        .buttonStyle(.bordered)
+
+                        if !advancedHost.isAdbAvailable || !advancedHost.isScrcpyAvailable {
+                            Button(action: {
+                                advancedHost.installDependenciesViaBrew()
+                            }) {
+                                Label("Install Dependencies (1-Click)", systemImage: "arrow.down.circle.fill")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(advancedHost.isInstallingDependencies)
+                        }
                     }
-                    .buttonStyle(.bordered)
+
+                    if advancedHost.isInstallingDependencies {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(advancedHost.dependencyInstallMessage)
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
+                    } else if !advancedHost.dependencyInstallMessage.isEmpty {
+                        Text(advancedHost.dependencyInstallMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .padding()
                 .background(Color(NSColor.controlBackgroundColor))

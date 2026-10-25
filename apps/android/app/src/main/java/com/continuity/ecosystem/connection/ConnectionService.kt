@@ -176,6 +176,29 @@ class ConnectionService : Service() {
         }
     }
 
+    private val isWritingStreamChunk = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    fun sendStreamChunk(chunk: RawBinaryChunk) {
+        if (!isWritingStreamChunk.compareAndSet(false, true)) {
+            // Drop stale frame if socket is currently transmitting previous frame
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            try {
+                val os = outputStream
+                if (os != null && currentConnectionState) {
+                    writeMutex.withLock {
+                        ProtocolFraming.writeBinaryChunk(os, chunk)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("ConnectionService", "Stream frame drop: ${e.message}")
+            } finally {
+                isWritingStreamChunk.set(false)
+            }
+        }
+    }
+
     suspend fun sendBinaryChunkSync(chunk: RawBinaryChunk) {
         try {
             writeMutex.withLock {

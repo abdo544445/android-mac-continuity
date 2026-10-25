@@ -39,7 +39,8 @@ enum class SessionType {
     SESSION_UNKNOWN,
     SESSION_SCREEN_MIRROR,
     SESSION_CAMERA_STREAM,
-    SESSION_REMOTE_INPUT
+    SESSION_REMOTE_INPUT,
+    SESSION_EXTENDED_DISPLAY
 }
 
 enum class StreamingState {
@@ -236,6 +237,74 @@ data class ErrorResponse(
     val originalRequestId: String = ""
 )
 
+// MARK: - Expanded Ecosystem Payloads
+
+data class HandoffActivity(
+    val activityId: String = UUID.randomUUID().toString(),
+    val url: String,
+    val title: String,
+    val sourceApp: String,
+    val scrollPosition: Float = 0f
+)
+
+data class BiometricChallenge(
+    val challengeId: String = UUID.randomUUID().toString(),
+    val promptTitle: String,
+    val clientNonce: String,
+    val timeoutSeconds: Int = 30
+)
+
+data class BiometricResponse(
+    val challengeId: String,
+    val approved: Boolean,
+    val signatureBase64: String = "",
+    val biometricType: String = "BIOMETRIC_FINGERPRINT"
+)
+
+data class SyncFileEntry(
+    val path: String,
+    val sizeBytes: Long,
+    val sha256: String,
+    val modifiedTimeMs: Long
+)
+
+data class FolderSyncManifest(
+    val syncId: String = UUID.randomUUID().toString(),
+    val folderName: String,
+    val files: List<SyncFileEntry>
+)
+
+data class TelephonyEvent(
+    val callId: String = UUID.randomUUID().toString(),
+    val callerName: String,
+    val callerNumber: String,
+    val state: String, // "RINGING", "ANSWERED", "DISCONNECTED"
+    val isVideo: Boolean = false
+)
+
+data class TelephonyAction(
+    val callId: String,
+    val action: String // "ACCEPT", "REJECT", "MUTE"
+)
+
+data class StorageItem(
+    val name: String,
+    val isDirectory: Boolean,
+    val sizeBytes: Long,
+    val modifiedTimeMs: Long
+)
+
+data class StorageListRequest(
+    val requestId: String = UUID.randomUUID().toString(),
+    val path: String
+)
+
+data class StorageListResponse(
+    val requestId: String,
+    val path: String,
+    val items: List<StorageItem>
+)
+
 data class ContinuityEnvelope(
     val version: Long = 1,
     val requestId: String = UUID.randomUUID().toString(),
@@ -271,5 +340,15 @@ data class ContinuityEnvelope(
     var sessionState: SessionState? = null,
     var inputEvent: InputEvent? = null,
 
-    var errorResponse: ErrorResponse? = null
+    var errorResponse: ErrorResponse? = null,
+
+    // Expanded Ecosystem Payloads
+    var handoffActivity: HandoffActivity? = null,
+    var biometricChallenge: BiometricChallenge? = null,
+    var biometricResponse: BiometricResponse? = null,
+    var folderSyncManifest: FolderSyncManifest? = null,
+    var telephonyEvent: TelephonyEvent? = null,
+    var telephonyAction: TelephonyAction? = null,
+    var storageListRequest: StorageListRequest? = null,
+    var storageListResponse: StorageListResponse? = null
 )

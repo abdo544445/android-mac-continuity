@@ -42,6 +42,19 @@ public struct MirroringView: View {
                 }
                 .frame(width: 110)
 
+                if agent.liveMirrorFrame != nil {
+                    Button(action: {
+                        agent.liveMirrorFrame = nil
+                        var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
+                        env.sessionStop = SessionStop(sessionId: "mirror", reason: "User stopped")
+                        agent.activeSession?.send(envelope: env)
+                    }) {
+                        Label("Stop Wireless Mirror", systemImage: "stop.circle.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                }
+
                 if advancedHost.isScrcpyAvailable {
                     Button(action: {
                         if advancedHost.isMirroringActive {

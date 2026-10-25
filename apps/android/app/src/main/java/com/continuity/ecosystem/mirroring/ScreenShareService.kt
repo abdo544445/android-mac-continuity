@@ -52,7 +52,16 @@ class ScreenShareService : Service() {
             try {
                 stopCapture()
                 mediaProjection = mpManager.getMediaProjection(resultCode, data)
-                startCapture(1280, 800)
+
+                val metrics = resources.displayMetrics
+                val screenW = metrics.widthPixels
+                val screenH = metrics.heightPixels
+                val maxDim = 1280f
+                val scale = minOf(1.0f, maxDim / maxOf(screenW, screenH))
+                val targetW = ((screenW * scale).toInt() / 2) * 2
+                val targetH = ((screenH * scale).toInt() / 2) * 2
+
+                startCapture(targetW, targetH)
             } catch (e: Exception) {
                 Log.e("ContinuityDebug", "MediaProjection start failed: ${e.message}", e)
             }
@@ -137,7 +146,7 @@ class ScreenShareService : Service() {
                         chunkTotal = 1,
                         data = jpegBytes
                     )
-                    ConnectionService.activeInstance?.sendBinaryChunk(chunk)
+                    ConnectionService.activeInstance?.sendStreamChunk(chunk)
                 } catch (e: Exception) {
                     Log.w("ContinuityDebug", "Frame encode error: ${e.message}")
                 } finally {

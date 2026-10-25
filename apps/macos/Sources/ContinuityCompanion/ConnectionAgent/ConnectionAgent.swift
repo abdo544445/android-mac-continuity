@@ -26,7 +26,9 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
     @Published public var isPairingSheetVisible: Bool = false
     @Published public var pendingPairProposal: PendingPairProposal? = nil
     @Published public var liveMirrorFrame: NSImage? = nil
+    @Published public var liveCameraFrame: NSImage? = nil
     @Published public var shouldNavigateToMirror: Bool = false
+    @Published public var shouldNavigateToCamera: Bool = false
 
     private var listener: ContinuityNetworkListener?
     private var heartbeatTimer: Timer?
@@ -190,6 +192,17 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
             }
             return
         }
+        if chunk.transferId == "00000000-0000-0000-0000-000000CAMERA" {
+            if let img = NSImage(data: chunk.data) {
+                Task { @MainActor in
+                    if self.liveCameraFrame == nil {
+                        self.shouldNavigateToCamera = true
+                    }
+                    self.liveCameraFrame = img
+                }
+            }
+            return
+        }
         Task { @MainActor in
             FileTransferEngine.shared.handleIncomingBinaryChunk(chunk, session: session)
         }
@@ -250,6 +263,28 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
         if let sessStop = envelope.sessionStop {
             debugLog("Android stopped session: \(sessStop.reason)")
             self.liveMirrorFrame = nil
+        }
+        if let handoff = envelope.handoffActivity {
+            HandoffBridge.shared.handleIncomingHandoff(handoff)
+        }
+        if let bioResp = envelope.biometricResponse {
+            BiometricAuthBridge.shared.handleBiometricResponse(bioResp)
+        }
+        if let manifest = envelope.folderSyncManifest {
+            FolderSyncEngine.shared.handleRemoteManifest(manifest, session: session)
+        }
+        if let callEvent = envelope.telephonyEvent {
+            CallRelayBridge.shared.handleTelephonyEvent(callEvent)
+        }
+        if let storageResp = envelope.storageListResponse {
+            StorageExplorerManager.shared.handleStorageListResponse(storageResp)
+        }
+        if let input = envelope.inputEvent, input.sessionId == "ext_display" {
+            ExtendedDisplayManager.shared.handleRemoteInput(
+                xRatio: input.normalizedX,
+                yRatio: input.normalizedY,
+                isDown: input.action == .down
+            )
         }
     }
 

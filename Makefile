@@ -8,6 +8,10 @@ build-macos:
 	@echo "🔨 Building macOS Companion .app bundle and CLI..."
 	./scripts/bundle_macos_app.sh
 
+build-dmg:
+	@echo "📦 Building macOS GUI Installer (.dmg)..."
+	./scripts/create_dmg.sh
+
 build-android:
 	@echo "🤖 Building Android Debug APK..."
 	cd apps/android && JAVA_HOME=~/.jdk21/Contents/Home ./gradlew assembleDebug
@@ -18,6 +22,10 @@ build-android:
 install-android:
 	@echo "📲 Installing Continuity APK on connected Android device via ADB..."
 	/opt/homebrew/bin/adb install -r dist/app-debug.apk
+
+install-mac:
+	@echo "🚀 Installing Continuity Companion to /Applications & checking dependencies..."
+	./scripts/Install-macOS.command
 
 open-mac:
 	@echo "🚀 Launching Continuity Companion .app..."

@@ -128,7 +128,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "v1.0.2 (Build 2)",
+                    text = "v1.0.3 (Build 3)",
                     fontWeight = FontWeight.Bold
                 )
             }

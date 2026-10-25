@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
@@ -32,6 +34,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.continuity.ecosystem.camera.CameraStreamingService
+import com.continuity.ecosystem.connection.ConnectionService
+import com.continuity.ecosystem.connection.RawBinaryChunk
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
 
 @Composable
 fun ContinuityWebcamScreen(
@@ -57,6 +63,15 @@ fun ContinuityWebcamScreen(
     var isFrontCamera by remember { mutableStateOf(false) }
     var isTorchOn by remember { mutableStateOf(false) }
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    var lastFrameTimeMs by remember { mutableStateOf(0L) }
+    var frameCounter by remember { mutableStateOf(0) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraExecutor.shutdown()
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) {
@@ -93,12 +108,52 @@ fun ContinuityWebcamScreen(
                             CameraSelector.DEFAULT_BACK_CAMERA
                         }
 
+                        val imageAnalysis = ImageAnalysis.Builder()
+                            .setTargetResolution(android.util.Size(1280, 720))
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                            .build()
+
+                        imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                            try {
+                                val now = System.currentTimeMillis()
+                                if (now - lastFrameTimeMs >= 40L) { // ~25 FPS
+                                    lastFrameTimeMs = now
+                                    val bmp = imageProxy.toBitmap()
+                                    val matrix = Matrix().apply {
+                                        postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+                                    }
+                                    val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+                                    val out = ByteArrayOutputStream()
+                                    rotated.compress(Bitmap.CompressFormat.JPEG, 65, out)
+                                    val bytes = out.toByteArray()
+                                    if (rotated !== bmp) {
+                                        rotated.recycle()
+                                    }
+                                    bmp.recycle()
+
+                                    ConnectionService.activeInstance?.sendStreamChunk(
+                                        RawBinaryChunk(
+                                            transferId = "00000000-0000-0000-0000-000000CAMERA",
+                                            chunkIndex = frameCounter++,
+                                            chunkTotal = 1,
+                                            data = bytes
+                                        )
+                                    )
+                                }
+                            } catch (_: Exception) {
+                            } finally {
+                                imageProxy.close()
+                            }
+                        }
+
                         try {
                             cameraProvider.unbindAll()
                             val cam = cameraProvider.bindToLifecycle(
                                 lifecycleOwner,
                                 cameraSelector,
-                                preview
+                                preview,
+                                imageAnalysis
                             )
                             cameraControl = cam.cameraControl
                         } catch (e: Exception) {
@@ -120,12 +175,53 @@ fun ContinuityWebcamScreen(
                         } else {
                             CameraSelector.DEFAULT_BACK_CAMERA
                         }
+
+                        val imageAnalysis = ImageAnalysis.Builder()
+                            .setTargetResolution(android.util.Size(1280, 720))
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                            .build()
+
+                        imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                            try {
+                                val now = System.currentTimeMillis()
+                                if (now - lastFrameTimeMs >= 40L) { // ~25 FPS
+                                    lastFrameTimeMs = now
+                                    val bmp = imageProxy.toBitmap()
+                                    val matrix = Matrix().apply {
+                                        postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+                                    }
+                                    val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+                                    val out = ByteArrayOutputStream()
+                                    rotated.compress(Bitmap.CompressFormat.JPEG, 65, out)
+                                    val bytes = out.toByteArray()
+                                    if (rotated !== bmp) {
+                                        rotated.recycle()
+                                    }
+                                    bmp.recycle()
+
+                                    ConnectionService.activeInstance?.sendStreamChunk(
+                                        RawBinaryChunk(
+                                            transferId = "00000000-0000-0000-0000-000000CAMERA",
+                                            chunkIndex = frameCounter++,
+                                            chunkTotal = 1,
+                                            data = bytes
+                                        )
+                                    )
+                                }
+                            } catch (_: Exception) {
+                            } finally {
+                                imageProxy.close()
+                            }
+                        }
+
                         try {
                             cameraProvider.unbindAll()
                             val cam = cameraProvider.bindToLifecycle(
                                 lifecycleOwner,
                                 cameraSelector,
-                                preview
+                                preview,
+                                imageAnalysis
                             )
                             cameraControl = cam.cameraControl
                         } catch (_: Exception) {}

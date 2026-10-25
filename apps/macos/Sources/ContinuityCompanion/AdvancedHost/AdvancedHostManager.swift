@@ -11,6 +11,8 @@ public final class AdvancedHostManager: ObservableObject {
     @Published public var isMirroringActive: Bool = false
     @Published public var connectedAdbDevices: [String] = []
     @Published public var statusMessage: String = ""
+    @Published public var isInstallingDependencies: Bool = false
+    @Published public var dependencyInstallMessage: String = ""
 
     private var scrcpyProcess: Process?
 
@@ -62,6 +64,55 @@ public final class AdvancedHostManager: ObservableObject {
 
         if isAdbAvailable {
             refreshDevices()
+        }
+    }
+
+    public func installDependenciesViaBrew() {
+        guard !isInstallingDependencies else { return }
+        isInstallingDependencies = true
+        dependencyInstallMessage = "Checking Homebrew environment..."
+
+        Task.detached {
+            let brewCandidates = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+            var brewPath = ""
+            for p in brewCandidates {
+                if FileManager.default.fileExists(atPath: p) {
+                    brewPath = p
+                    break
+                }
+            }
+
+            guard !brewPath.isEmpty else {
+                await MainActor.run {
+                    self.isInstallingDependencies = false
+                    self.dependencyInstallMessage = "Homebrew not found. Please install Homebrew from brew.sh or use built-in wireless engine."
+                }
+                return
+            }
+
+            await MainActor.run {
+                self.dependencyInstallMessage = "Installing scrcpy and android-platform-tools..."
+            }
+
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: brewPath)
+            proc.arguments = ["install", "scrcpy", "android-platform-tools"]
+            var env = ProcessInfo.processInfo.environment
+            env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            proc.environment = env
+
+            try? proc.run()
+            proc.waitUntilExit()
+
+            await MainActor.run {
+                self.isInstallingDependencies = false
+                self.detectTooling()
+                if self.isScrcpyAvailable && self.isAdbAvailable {
+                    self.dependencyInstallMessage = "All dependencies installed successfully!"
+                } else {
+                    self.dependencyInstallMessage = "Installation finished. Tools refreshed."
+                }
+            }
         }
     }
 

@@ -46,22 +46,29 @@ public struct CameraView: View {
             ZStack {
                 Color.black
 
-                VStack(spacing: 16) {
-                    Image(systemName: "camera.circle.fill")
-                        .font(.system(size: 64))
-                        .foregroundColor(isStreaming ? .green : .gray)
+                if let camImg = agent.liveCameraFrame {
+                    Image(nsImage: camImg)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    VStack(spacing: 16) {
+                        Image(systemName: "camera.circle.fill")
+                            .font(.system(size: 64))
+                            .foregroundColor(isStreaming ? .green : .gray)
 
-                    Text(isStreaming ? "Camera Stream Active in FaceTime, Zoom & Meet" : "Camera Ready")
-                        .font(.headline)
-                        .foregroundColor(.white)
+                        Text(isStreaming ? "Connecting to Device Camera..." : "Camera Ready")
+                            .font(.headline)
+                            .foregroundColor(.white)
 
-                    Text("Your Android device acts as a crystal-clear 1080p macOS webcam with low latency and hardware H.264 encoding.")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 420)
+                        Text("Use your Huawei / Android device camera as a crystal-clear high-definition webcam for macOS.")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 420)
+                    }
+                    .padding()
                 }
-                .padding()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -105,6 +112,7 @@ public struct CameraView: View {
             )
             agent.activeSession?.send(envelope: env)
         } else {
+            agent.liveCameraFrame = nil
             var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
             env.sessionStop = SessionStop(sessionId: "camera", reason: "User stopped")
             agent.activeSession?.send(envelope: env)

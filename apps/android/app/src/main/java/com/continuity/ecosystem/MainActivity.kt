@@ -5,13 +5,15 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.media.projection.MediaProjectionManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,23 +36,35 @@ import com.continuity.ecosystem.connection.LanDiscoveryManager
 import com.continuity.ecosystem.core.*
 import com.continuity.ecosystem.files.AndroidTransferItem
 import com.continuity.ecosystem.files.FileTransferManager
+import com.continuity.ecosystem.handoff.HandoffManager
 import com.continuity.ecosystem.mirroring.ScreenShareService
 import com.continuity.ecosystem.pairing.PairingManager
 import com.continuity.ecosystem.pairing.PairingQrData
+import com.continuity.ecosystem.security.BiometricAuthManager
+import com.continuity.ecosystem.storage.StorageExplorerService
+import com.continuity.ecosystem.sync.FolderSyncManager
+import com.continuity.ecosystem.telephony.CallRelayService
 import com.continuity.ecosystem.ui.screens.ContinuityWebcamScreen
+import com.continuity.ecosystem.ui.screens.ExtendedDisplayScreen
 import com.continuity.ecosystem.ui.screens.HomeScreen
 import com.continuity.ecosystem.ui.screens.PairingScreen
 import com.continuity.ecosystem.ui.screens.SettingsScreen
 import com.continuity.ecosystem.ui.theme.ContinuityTheme
 import java.util.UUID
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private lateinit var identity: DeviceIdentity
     private lateinit var pairingManager: PairingManager
     private lateinit var transferManager: FileTransferManager
     private lateinit var clipboardManager: ClipboardSyncManager
     private lateinit var lanDiscoveryManager: LanDiscoveryManager
+
+    private lateinit var handoffManager: HandoffManager
+    private lateinit var storageExplorerService: StorageExplorerService
+    private lateinit var folderSyncManager: FolderSyncManager
+    private lateinit var callRelayService: CallRelayService
+    private lateinit var biometricAuthManager: BiometricAuthManager
 
     private var connectionService: ConnectionService? = null
     private var isBound = false
@@ -62,6 +76,10 @@ class MainActivity : ComponentActivity() {
     private var transfersListState by mutableStateOf<List<AndroidTransferItem>>(emptyList())
     private var discoveredPeersState by mutableStateOf<List<DiscoveredPeer>>(emptyList())
     private var pendingPinConfirmState by mutableStateOf<Pair<DiscoveredPeer, String>?>(null)
+
+    private var isExtendedDisplayActiveState by mutableStateOf(false)
+    private var extendedDisplayBitmapState by mutableStateOf<Bitmap?>(null)
+    private var isWebcamActiveState by mutableStateOf(false)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -129,6 +147,13 @@ class MainActivity : ComponentActivity() {
         clipboardManager = ClipboardSyncManager(this)
         lanDiscoveryManager = LanDiscoveryManager(this, identity)
 
+        handoffManager = HandoffManager(this)
+        storageExplorerService = StorageExplorerService(this)
+        folderSyncManager = FolderSyncManager(this)
+        callRelayService = CallRelayService(this)
+        biometricAuthManager = BiometricAuthManager(this)
+        biometricAuthManager.attachActivity(this)
+
         lanDiscoveryManager.onPeersUpdated = { peers ->
             discoveredPeersState = peers
         }
@@ -159,11 +184,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun setupServiceListeners(service: ConnectionService) {
+        callRelayService.startListening(service)
+
         service.onConnectionStateChanged = { connected ->
             isConnectedState = connected
         }
         service.onBinaryChunkReceived = { chunk ->
-            transferManager.handleIncomingBinaryChunk(chunk)
+            if (chunk.transferId == "00000000-0000-0000-0000-00EXT_DISPLAY") {
+                val bmp = BitmapFactory.decodeByteArray(chunk.data, 0, chunk.data.size)
+                if (bmp != null) {
+                    extendedDisplayBitmapState = bmp
+                    if (!isExtendedDisplayActiveState) {
+                        isExtendedDisplayActiveState = true
+                    }
+                }
+            } else {
+                transferManager.handleIncomingBinaryChunk(chunk)
+            }
         }
         service.onEnvelopeReceived = { env ->
             env.pairConfirm?.let { confirm ->
@@ -204,10 +241,38 @@ class MainActivity : ComponentActivity() {
             env.clipboardPayload?.let { clip ->
                 clipboardManager.handleIncomingClipboard(clip)
             }
+            env.handoffActivity?.let { activity ->
+                handoffManager.handleIncomingHandoff(activity)
+            }
+            env.biometricChallenge?.let { challenge ->
+                biometricAuthManager.handleBiometricChallenge(challenge, service)
+            }
+            env.folderSyncManifest?.let { manifest ->
+                folderSyncManager.handleIncomingManifest(manifest, service)
+            }
+            env.telephonyAction?.let { action ->
+                callRelayService.handleTelephonyAction(action)
+            }
+            env.storageListRequest?.let { req ->
+                storageExplorerService.handleStorageListRequest(req, service)
+            }
             env.sessionRequest?.let { req ->
                 if (req.type == SessionType.SESSION_SCREEN_MIRROR) {
                     val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                     mediaProjectionLauncher.launch(mpManager.createScreenCaptureIntent())
+                } else if (req.type == SessionType.SESSION_EXTENDED_DISPLAY) {
+                    isExtendedDisplayActiveState = true
+                } else if (req.type == SessionType.SESSION_CAMERA_STREAM) {
+                    isWebcamActiveState = true
+                }
+            }
+            env.sessionStop?.let { stop ->
+                if (isExtendedDisplayActiveState) {
+                    isExtendedDisplayActiveState = false
+                    extendedDisplayBitmapState = null
+                }
+                if (isWebcamActiveState && stop.sessionId == "camera") {
+                    isWebcamActiveState = false
                 }
             }
         }
@@ -309,7 +374,6 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun MainAppScreen() {
         var selectedTab by remember { mutableIntStateOf(0) }
-        var isWebcamActive by remember { mutableStateOf(false) }
 
         pendingPinConfirmState?.let { (peer, pin) ->
             val formattedPin = if (pin.length == 6) "${pin.substring(0, 3)} ${pin.substring(3, 6)}" else pin
@@ -366,10 +430,25 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        if (isWebcamActive) {
+        if (isExtendedDisplayActiveState) {
+            ExtendedDisplayScreen(
+                currentFrameBitmap = extendedDisplayBitmapState,
+                connectionService = connectionService,
+                onExit = {
+                    isExtendedDisplayActiveState = false
+                    extendedDisplayBitmapState = null
+                    connectionService?.sendEnvelope(
+                        ContinuityEnvelope(
+                            senderDeviceId = identity.deviceId,
+                            sessionStop = SessionStop(sessionId = "ext_display")
+                        )
+                    )
+                }
+            )
+        } else if (isWebcamActiveState) {
             ContinuityWebcamScreen(
                 macName = pairedMacNameState,
-                onClose = { isWebcamActive = false }
+                onClose = { isWebcamActiveState = false }
             )
         } else {
             Scaffold(
@@ -425,7 +504,28 @@ class MainActivity : ComponentActivity() {
                                 mediaProjectionLauncher.launch(mpManager.createScreenCaptureIntent())
                             },
                             onCameraClicked = {
-                                isWebcamActive = true
+                                isWebcamActiveState = true
+                            },
+                            onExtendedDisplayClicked = {
+                                isExtendedDisplayActiveState = true
+                                connectionService?.sendEnvelope(
+                                    ContinuityEnvelope(
+                                        senderDeviceId = identity.deviceId,
+                                        sessionRequest = SessionRequest(sessionId = "ext_display", type = SessionType.SESSION_EXTENDED_DISPLAY)
+                                    )
+                                )
+                            },
+                            onFolderSyncClicked = {
+                                connectionService?.let { svc ->
+                                    val manifest = folderSyncManager.generateManifest()
+                                    svc.sendEnvelope(
+                                        ContinuityEnvelope(
+                                            senderDeviceId = identity.deviceId,
+                                            folderSyncManifest = manifest
+                                        )
+                                    )
+                                    Toast.makeText(this@MainActivity, "Folder sync initiated", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             transfers = transfersListState
                         )
@@ -487,6 +587,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (::biometricAuthManager.isInitialized) {
+            biometricAuthManager.detachActivity()
+        }
         if (::lanDiscoveryManager.isInitialized) {
             lanDiscoveryManager.stop()
         }

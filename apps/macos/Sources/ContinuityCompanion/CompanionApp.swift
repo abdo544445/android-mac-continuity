@@ -30,6 +30,12 @@ struct CompanionApp: App {
                         NavigationLink(value: "Mirroring") {
                             Label("Screen Mirror", systemImage: "rectangle.inset.filled.and.cursorarrow")
                         }
+                        NavigationLink(value: "ExtendedDisplay") {
+                            Label("Extended Display", systemImage: "display.2")
+                        }
+                        NavigationLink(value: "Storage") {
+                            Label("Storage Explorer", systemImage: "folder.badge.gearshape")
+                        }
                         NavigationLink(value: "Camera") {
                             Label("Webcam Stream", systemImage: "camera")
                         }
@@ -56,6 +62,12 @@ struct CompanionApp: App {
                 if newVal {
                     selectedTab = "Mirroring"
                     agent.shouldNavigateToMirror = false
+                }
+            }
+            .onChange(of: agent.shouldNavigateToCamera) { newVal in
+                if newVal {
+                    selectedTab = "Camera"
+                    agent.shouldNavigateToCamera = false
                 }
             }
             .sheet(item: $agent.pendingPairProposal) { proposal in
@@ -89,6 +101,10 @@ struct CompanionApp: App {
             NotificationsView()
         case "Mirroring":
             MirroringView()
+        case "ExtendedDisplay":
+            ExtendedDisplayHostView()
+        case "Storage":
+            StorageExplorerView()
         case "Camera":
             CameraView()
         case "BackupSync":

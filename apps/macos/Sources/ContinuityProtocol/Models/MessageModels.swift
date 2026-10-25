@@ -40,6 +40,7 @@ public enum SessionType: String, Codable, Sendable {
     case screenMirror = "SESSION_SCREEN_MIRROR"
     case cameraStream = "SESSION_CAMERA_STREAM"
     case remoteInput = "SESSION_REMOTE_INPUT"
+    case extendedDisplay = "SESSION_EXTENDED_DISPLAY"
 }
 
 public enum StreamingState: String, Codable, Sendable {
@@ -424,6 +425,140 @@ public struct ErrorResponse: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Expanded Ecosystem Payloads
+
+public struct HandoffActivity: Codable, Sendable, Equatable {
+    public var activityId: String
+    public var url: String
+    public var title: String
+    public var sourceApp: String
+    public var scrollPosition: Float
+
+    public init(activityId: String = UUID().uuidString, url: String, title: String, sourceApp: String, scrollPosition: Float = 0.0) {
+        self.activityId = activityId
+        self.url = url
+        self.title = title
+        self.sourceApp = sourceApp
+        self.scrollPosition = scrollPosition
+    }
+}
+
+public struct BiometricChallenge: Codable, Sendable, Equatable {
+    public var challengeId: String
+    public var promptTitle: String
+    public var clientNonce: String
+    public var timeoutSeconds: Int32
+
+    public init(challengeId: String = UUID().uuidString, promptTitle: String, clientNonce: String, timeoutSeconds: Int32 = 30) {
+        self.challengeId = challengeId
+        self.promptTitle = promptTitle
+        self.clientNonce = clientNonce
+        self.timeoutSeconds = timeoutSeconds
+    }
+}
+
+public struct BiometricResponse: Codable, Sendable, Equatable {
+    public var challengeId: String
+    public var approved: Bool
+    public var signatureBase64: String
+    public var biometricType: String
+
+    public init(challengeId: String, approved: Bool, signatureBase64: String = "", biometricType: String = "BIOMETRIC_FINGERPRINT") {
+        self.challengeId = challengeId
+        self.approved = approved
+        self.signatureBase64 = signatureBase64
+        self.biometricType = biometricType
+    }
+}
+
+public struct SyncFileEntry: Codable, Sendable, Equatable {
+    public var path: String
+    public var sizeBytes: Int64
+    public var sha256: String
+    public var modifiedTimeMs: Int64
+
+    public init(path: String, sizeBytes: Int64, sha256: String, modifiedTimeMs: Int64) {
+        self.path = path
+        self.sizeBytes = sizeBytes
+        self.sha256 = sha256
+        self.modifiedTimeMs = modifiedTimeMs
+    }
+}
+
+public struct FolderSyncManifest: Codable, Sendable, Equatable {
+    public var syncId: String
+    public var folderName: String
+    public var files: [SyncFileEntry]
+
+    public init(syncId: String = UUID().uuidString, folderName: String, files: [SyncFileEntry]) {
+        self.syncId = syncId
+        self.folderName = folderName
+        self.files = files
+    }
+}
+
+public struct TelephonyEvent: Codable, Sendable, Equatable {
+    public var callId: String
+    public var callerName: String
+    public var callerNumber: String
+    public var state: String // "RINGING", "ANSWERED", "DISCONNECTED"
+    public var isVideo: Bool
+
+    public init(callId: String = UUID().uuidString, callerName: String, callerNumber: String, state: String, isVideo: Bool = false) {
+        self.callId = callId
+        self.callerName = callerName
+        self.callerNumber = callerNumber
+        self.state = state
+        self.isVideo = isVideo
+    }
+}
+
+public struct TelephonyAction: Codable, Sendable, Equatable {
+    public var callId: String
+    public var action: String // "ACCEPT", "REJECT", "MUTE"
+
+    public init(callId: String, action: String) {
+        self.callId = callId
+        self.action = action
+    }
+}
+
+public struct StorageItem: Codable, Sendable, Equatable {
+    public var name: String
+    public var isDirectory: Bool
+    public var sizeBytes: Int64
+    public var modifiedTimeMs: Int64
+
+    public init(name: String, isDirectory: Bool, sizeBytes: Int64, modifiedTimeMs: Int64) {
+        self.name = name
+        self.isDirectory = isDirectory
+        self.sizeBytes = sizeBytes
+        self.modifiedTimeMs = modifiedTimeMs
+    }
+}
+
+public struct StorageListRequest: Codable, Sendable, Equatable {
+    public var requestId: String
+    public var path: String
+
+    public init(requestId: String = UUID().uuidString, path: String) {
+        self.requestId = requestId
+        self.path = path
+    }
+}
+
+public struct StorageListResponse: Codable, Sendable, Equatable {
+    public var requestId: String
+    public var path: String
+    public var items: [StorageItem]
+
+    public init(requestId: String, path: String, items: [StorageItem]) {
+        self.requestId = requestId
+        self.path = path
+        self.items = items
+    }
+}
+
 // MARK: - Top-Level Envelope
 
 public struct ContinuityEnvelope: Codable, Sendable, Equatable {
@@ -462,6 +597,16 @@ public struct ContinuityEnvelope: Codable, Sendable, Equatable {
     public var inputEvent: InputEvent?
 
     public var errorResponse: ErrorResponse?
+
+    // Expanded Ecosystem Payloads
+    public var handoffActivity: HandoffActivity?
+    public var biometricChallenge: BiometricChallenge?
+    public var biometricResponse: BiometricResponse?
+    public var folderSyncManifest: FolderSyncManifest?
+    public var telephonyEvent: TelephonyEvent?
+    public var telephonyAction: TelephonyAction?
+    public var storageListRequest: StorageListRequest?
+    public var storageListResponse: StorageListResponse?
 
     public init(
         version: UInt32 = 1,
