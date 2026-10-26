@@ -13,14 +13,20 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 echo "📦 Bundling $APP_NAME.app into $DIST_DIR..."
 
-# Build the latest SPM binary
+# Build the latest SPM product executable
 cd "$WORKSPACE_DIR/apps/macos"
-swift build --target "$APP_NAME"
+swift build --product "$APP_NAME"
 
 # Locate the compiled binary
-BIN_PATH="$WORKSPACE_DIR/apps/macos/.build/arm64-apple-macosx/debug/$APP_NAME"
-if [ ! -f "$BIN_PATH" ]; then
+SHOW_BIN="$(swift build --show-bin-path 2>/dev/null)"
+if [ -n "$SHOW_BIN" ] && [ -f "$SHOW_BIN/$APP_NAME" ]; then
+    BIN_PATH="$SHOW_BIN/$APP_NAME"
+elif [ -f "$WORKSPACE_DIR/apps/macos/.build/arm64-apple-macosx/debug/$APP_NAME" ]; then
+    BIN_PATH="$WORKSPACE_DIR/apps/macos/.build/arm64-apple-macosx/debug/$APP_NAME"
+elif [ -f "$WORKSPACE_DIR/apps/macos/.build/debug/$APP_NAME" ]; then
     BIN_PATH="$WORKSPACE_DIR/apps/macos/.build/debug/$APP_NAME"
+else
+    BIN_PATH="$(find "$WORKSPACE_DIR/apps/macos/.build" -type f -name "$APP_NAME" 2>/dev/null | head -n 1)"
 fi
 
 if [ ! -f "$BIN_PATH" ]; then

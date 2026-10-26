@@ -17,8 +17,8 @@ jobs:
       - name: Build macOS Protocol Library & CLI
         run: |
           cd apps/macos
-          swift build --target ContinuityCLI
-          swift build --target ContinuityCompanion
+          swift build --product ContinuityCLI
+          swift build --product ContinuityCompanion
 
       - name: Execute Protocol Test Suite
         run: |
