@@ -71,7 +71,7 @@ public struct ContinuityTestSuite {
             let encoder = FrameEncoder()
             let decoder = FrameDecoder()
             var env = ContinuityEnvelope(senderDeviceId: "test-mac-01")
-            env.heartbeat = Heartbeat(sequenceNumber = 42)
+            env.heartbeat = Heartbeat(sequenceNumber: 42)
 
             let frame = try encoder.encode(envelope: env)
             decoder.append(data: frame)

@@ -41,10 +41,27 @@ public struct MirroringView: View {
                     .controlSize(.small)
                     .help("Automatically paste copied Mac text & images into your mirrored Android device")
 
+                Toggle("Audio to Mac", isOn: $advancedHost.isAudioForwardingEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help("Stream phone audio directly through Mac speakers during 60 FPS mirror")
+
+                Button(action: {
+                    Task {
+                        if let screenshotURL = await advancedHost.capturePhoneScreenshot() {
+                            NSWorkspace.shared.activateFileViewerSelecting([screenshotURL])
+                        }
+                    }
+                }) {
+                    Label("Capture Screen", systemImage: "camera.viewfinder")
+                }
+                .buttonStyle(.bordered)
+                .help("Take a high-resolution phone screenshot and save to Mac Downloads folder")
+
                 Button(action: {
                     clipboardBridge.sendCurrentClipboard(session: agent.activeSession, triggerPaste: true)
                 }) {
-                    Label("Paste Mac Clipboard (Text / Image)", systemImage: "doc.on.clipboard.fill")
+                    Label("Paste Mac Clipboard", systemImage: "doc.on.clipboard.fill")
                 }
                 .buttonStyle(.bordered)
                 .keyboardShortcut("v", modifiers: [.command, .shift])
@@ -209,8 +226,8 @@ public struct MirroringView: View {
 
             Divider()
 
-            // Floating Navigation Control Bar
-            HStack(spacing: 32) {
+            // Floating Navigation & Quick App Control Bar
+            HStack(spacing: 24) {
                 navButton(icon: "arrow.uturn.backward", label: "Back") {
                     mirrorManager.sendInput(action: .navBack, session: agent.activeSession)
                 }
@@ -233,6 +250,19 @@ public struct MirroringView: View {
                 }
                 navButton(icon: "speaker.wave.1", label: "Vol-") {
                     mirrorManager.sendKey(code: 25, session: agent.activeSession) // KEYCODE_VOLUME_DOWN
+                }
+                Divider().frame(height: 24)
+                navButton(icon: "message.fill", label: "WhatsApp") {
+                    advancedHost.launchApp(packageName: "com.whatsapp")
+                }
+                navButton(icon: "play.rectangle.fill", label: "YouTube") {
+                    advancedHost.launchApp(packageName: "com.google.android.youtube")
+                }
+                navButton(icon: "globe", label: "Browser") {
+                    advancedHost.launchApp(packageName: "com.android.chrome")
+                }
+                navButton(icon: "gearshape.fill", label: "Settings") {
+                    advancedHost.executeAdbCommand(args: ["shell", "am", "start", "-a", "android.settings.SETTINGS"])
                 }
             }
             .padding(.vertical, 12)
@@ -365,12 +395,32 @@ public struct MirroringView: View {
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                    if let data = item as? Data,
-                       let url = URL(dataRepresentation: data, relativeTo: nil) {
+            if provider.canLoadObject(ofClass: URL.self) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    if let fileURL = url {
                         Task { @MainActor in
-                            clipboardBridge.sendDroppedImageFile(url: url, session: agent.activeSession, triggerPaste: true)
+                            self.processDroppedURL(fileURL)
+                        }
+                    }
+                }
+                return true
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                    var targetURL: URL?
+                    if let u = item as? URL {
+                        targetURL = u
+                    } else if let ns = item as? NSURL {
+                        targetURL = ns as URL
+                    } else if let data = item as? Data {
+                        if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
+                            targetURL = str.hasPrefix("file://") ? URL(string: str) : URL(fileURLWithPath: str)
+                        } else {
+                            targetURL = URL(dataRepresentation: data, relativeTo: nil)
+                        }
+                    }
+                    if let fileURL = targetURL {
+                        Task { @MainActor in
+                            self.processDroppedURL(fileURL)
                         }
                     }
                 }
@@ -378,6 +428,17 @@ public struct MirroringView: View {
             }
         }
         return false
+    }
+
+    private func processDroppedURL(_ url: URL) {
+        let ext = url.pathExtension.lowercased()
+        if ext == "apk" {
+            FileTransferEngine.shared.queueOutgoingTransfer(fileURL: url, session: agent.activeSession)
+        } else if ["png", "jpg", "jpeg", "heic", "webp", "gif"].contains(ext) {
+            clipboardBridge.sendDroppedImageFile(url: url, session: agent.activeSession, triggerPaste: true)
+        } else {
+            FileTransferEngine.shared.queueOutgoingTransfer(fileURL: url, session: agent.activeSession)
+        }
     }
 
     private func navButton(icon: String, label: String, action: @escaping () -> Void) -> some View {

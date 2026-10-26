@@ -221,7 +221,8 @@ class FileTransferManager(
     }
 
     private fun exportToPublicDownloads(sourceFile: File, fileName: String): Boolean {
-        return try {
+        // Try MediaStore first
+        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
@@ -230,25 +231,38 @@ class FileTransferManager(
                     put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
                 val resolver = context.contentResolver
-                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
-                resolver.openOutputStream(uri)?.use { out ->
-                    FileInputStream(sourceFile).use { input ->
-                        input.copyTo(out, bufferSize = 1024 * 1024)
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { out ->
+                        FileInputStream(sourceFile).use { input ->
+                            input.copyTo(out, bufferSize = 1024 * 1024)
+                        }
                     }
+                    values.clear()
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                    return true
                 }
-                values.clear()
-                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                resolver.update(uri, values, null, null)
-                true
-            } else {
-                val pubDir = File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                    "Continuity"
-                ).also { it.mkdirs() }
-                val dest = File(pubDir, fileName)
-                sourceFile.copyTo(dest, overwrite = true)
-                true
             }
+        } catch (e: Exception) {
+            Log.w("ContinuityDebug", "MediaStore insert failed, falling back to direct public storage: ${e.message}")
+        }
+
+        // Direct storage fallback
+        return try {
+            val pubDir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "Continuity"
+            ).also { it.mkdirs() }
+            val dest = File(pubDir, fileName)
+            sourceFile.copyTo(dest, overwrite = true)
+
+            // Broadcast media scanner so file appears in Downloads app immediately
+            val mediaScanIntent = android.content.Intent(android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE).apply {
+                data = Uri.fromFile(dest)
+            }
+            context.sendBroadcast(mediaScanIntent)
+            true
         } catch (e: Exception) {
             Log.e("ContinuityDebug", "Failed to export to public Downloads: ${e.message}", e)
             false

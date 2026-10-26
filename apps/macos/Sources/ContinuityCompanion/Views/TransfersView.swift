@@ -1,10 +1,12 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import ContinuityProtocol
 
 public struct TransfersView: View {
     @ObservedObject var engine = FileTransferEngine.shared
     @ObservedObject var agent = ConnectionAgent.shared
+    @State private var isDropTargeted = false
 
     public init() {}
 
@@ -29,28 +31,74 @@ public struct TransfersView: View {
 
             Divider()
 
-            if engine.transfers.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "tray.and.arrow.down")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-                    Text("No file transfers yet")
-                        .font(.headline)
-                    Text("Send photos, documents, and videos directly to your Android device with zero size limits.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 360)
+            ZStack {
+                if engine.transfers.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "tray.and.arrow.down")
+                            .font(.system(size: 48))
+                            .foregroundColor(isDropTargeted ? .blue : .secondary)
+                        Text(isDropTargeted ? "Drop Files to Send Now" : "No file transfers yet")
+                            .font(.headline)
+                        Text("Drag and drop any files or photos here to instantly transfer them to your phone.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 360)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(engine.transfers) { item in
+                            transferRow(item: item)
+                        }
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
-                    ForEach(engine.transfers) { item in
-                        transferRow(item: item)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isDropTargeted ? Color.blue : Color.clear, lineWidth: 3)
+                    .padding(8)
+            )
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                handleDrop(providers: providers)
+            }
+        }
+    }
+
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            if provider.canLoadObject(ofClass: URL.self) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    if let fileURL = url {
+                        Task { @MainActor in
+                            engine.queueOutgoingTransfer(fileURL: fileURL, session: agent.activeSession)
+                        }
+                    }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                    var targetURL: URL?
+                    if let u = item as? URL {
+                        targetURL = u
+                    } else if let ns = item as? NSURL {
+                        targetURL = ns as URL
+                    } else if let data = item as? Data {
+                        if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
+                            targetURL = str.hasPrefix("file://") ? URL(string: str) : URL(fileURLWithPath: str)
+                        } else {
+                            targetURL = URL(dataRepresentation: data, relativeTo: nil)
+                        }
+                    }
+                    if let fileURL = targetURL {
+                        Task { @MainActor in
+                            engine.queueOutgoingTransfer(fileURL: fileURL, session: agent.activeSession)
+                        }
                     }
                 }
             }
         }
+        return true
     }
 
     private func transferRow(item: ActiveTransfer) -> some View {

@@ -15,6 +15,7 @@ public final class AdvancedHostManager: ObservableObject {
     @Published public var dependencyInstallMessage: String = ""
 
     @Published public var isKeepAliveEnabled: Bool = true
+    @Published public var isAudioForwardingEnabled: Bool = true
     private var keepAliveTimer: Timer?
 
     private var scrcpyProcess: Process?
@@ -24,7 +25,7 @@ public final class AdvancedHostManager: ObservableObject {
         startKeepAliveTimer()
     }
 
-    private func buildProcessEnvironment() -> [String: String] {
+    public func buildProcessEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/Library/Android/sdk/platform-tools"
         if let existingPath = env["PATH"], !existingPath.isEmpty {
@@ -346,6 +347,11 @@ public final class AdvancedHostManager: ObservableObject {
                 "--max-fps=60",
                 "--window-title=Continuity Mirror"
             ]
+            if self.isAudioForwardingEnabled {
+                args.append("--audio-buffer=50")
+            } else {
+                args.append("--no-audio")
+            }
             let targetSerial = serial ?? self.resolveActiveDevice()
             if let s = targetSerial, !s.isEmpty {
                 args.append(contentsOf: ["-s", s])
@@ -457,5 +463,87 @@ public final class AdvancedHostManager: ObservableObject {
     /// Injects Android's native KEYCODE_PASTE (279) into the focused app on the mirrored phone/tablet.
     public func sendPasteKeyevent() {
         executeAdbCommand(args: ["shell", "input", "keyevent", "279"])
+    }
+
+    public func launchApp(packageName: String) {
+        guard isAdbAvailable else { return }
+        executeAdbCommand(args: ["shell", "monkey", "-p", packageName, "-c", "android.intent.category.LAUNCHER", "1"])
+    }
+
+    public func capturePhoneScreenshot() async -> URL? {
+        guard isAdbAvailable else { return nil }
+        let path = adbPath
+        let env = buildProcessEnvironment()
+        let target = resolveActiveDevice()
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let remotePath = "/sdcard/Download/continuity_screenshot_\(timestamp).png"
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        let localURL = downloads.appendingPathComponent("Screenshot_\(timestamp).png")
+
+        return await Task.detached {
+            let capProc = Process()
+            capProc.executableURL = URL(fileURLWithPath: path)
+            capProc.environment = env
+            var capArgs = ["shell", "screencap", "-p", remotePath]
+            if let t = target, !t.isEmpty { capArgs = ["-s", t] + capArgs }
+            capProc.arguments = capArgs
+            try? capProc.run()
+            capProc.waitUntilExit()
+
+            let pullProc = Process()
+            pullProc.executableURL = URL(fileURLWithPath: path)
+            pullProc.environment = env
+            var pullArgs = ["pull", remotePath, localURL.path]
+            if let t = target, !t.isEmpty { pullArgs = ["-s", t] + pullArgs }
+            pullProc.arguments = pullArgs
+            try? pullProc.run()
+            pullProc.waitUntilExit()
+
+            let rmProc = Process()
+            rmProc.executableURL = URL(fileURLWithPath: path)
+            rmProc.environment = env
+            var rmArgs = ["shell", "rm", remotePath]
+            if let t = target, !t.isEmpty { rmArgs = ["-s", t] + rmArgs }
+            rmProc.arguments = rmArgs
+            try? rmProc.run()
+
+            if FileManager.default.fileExists(atPath: localURL.path) {
+                return localURL
+            }
+            return nil
+        }.value
+    }
+
+    public func installApk(fileURL: URL) async -> (success: Bool, message: String) {
+        guard isAdbAvailable else { return (false, "ADB is not available") }
+        let path = adbPath
+        let env = buildProcessEnvironment()
+        let target = resolveActiveDevice()
+
+        return await Task.detached {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: path)
+            proc.environment = env
+            var args = ["install", "-r", fileURL.path]
+            if let t = target, !t.isEmpty { args = ["-s", t] + args }
+            proc.arguments = args
+
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = pipe
+            do {
+                try proc.run()
+                proc.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if output.contains("Success") || proc.terminationStatus == 0 {
+                    return (true, "Installed successfully!")
+                } else {
+                    return (false, output.isEmpty ? "Install failed (exit code \(proc.terminationStatus))" : output)
+                }
+            } catch {
+                return (false, error.localizedDescription)
+            }
+        }.value
     }
 }

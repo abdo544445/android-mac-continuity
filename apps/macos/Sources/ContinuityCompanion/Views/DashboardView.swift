@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import ContinuityProtocol
 
 public struct DashboardView: View {
@@ -15,6 +16,7 @@ public struct DashboardView: View {
     @ObservedObject var extDisplay = ExtendedDisplayManager.shared
     @ObservedObject var universalControl = UniversalControlManager.shared
     @Binding var selectedTab: String
+    @State private var isDropTargeted = false
 
     public init(selectedTab: Binding<String>) {
         self._selectedTab = selectedTab
@@ -200,6 +202,47 @@ public struct DashboardView: View {
                 }
             }
             .padding(24)
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isDropTargeted ? Color.blue : Color.clear, lineWidth: 3)
+                .padding(8)
+        )
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            for provider in providers {
+                if provider.canLoadObject(ofClass: URL.self) {
+                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                        if let fileURL = url {
+                            Task { @MainActor in
+                                transferEngine.queueOutgoingTransfer(fileURL: fileURL, session: agent.activeSession)
+                                selectedTab = "Transfers"
+                            }
+                        }
+                    }
+                } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                    provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                        var targetURL: URL?
+                        if let u = item as? URL {
+                            targetURL = u
+                        } else if let ns = item as? NSURL {
+                            targetURL = ns as URL
+                        } else if let data = item as? Data {
+                            if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
+                                targetURL = str.hasPrefix("file://") ? URL(string: str) : URL(fileURLWithPath: str)
+                            } else {
+                                targetURL = URL(dataRepresentation: data, relativeTo: nil)
+                            }
+                        }
+                        if let fileURL = targetURL {
+                            Task { @MainActor in
+                                transferEngine.queueOutgoingTransfer(fileURL: fileURL, session: agent.activeSession)
+                                selectedTab = "Transfers"
+                            }
+                        }
+                    }
+                }
+            }
+            return true
         }
     }
 

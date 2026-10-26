@@ -78,69 +78,132 @@ public final class FileTransferEngine: ObservableObject {
         )
         transfers.insert(transfer, at: 0)
 
-        // Asynchronously stream chunk-by-chunk with TCP backpressure
+        let adbAvailable = AdvancedHostManager.shared.isAdbAvailable && !AdvancedHostManager.shared.connectedAdbDevices.isEmpty
+        let adbPath = AdvancedHostManager.shared.adbPath
+        let adbEnv = AdvancedHostManager.shared.buildProcessEnvironment()
+        let adbTarget = AdvancedHostManager.shared.resolveActiveDevice()
+
+        // Asynchronously stream chunk-by-chunk with TCP backpressure or high-speed ADB push
         Task.detached {
-            guard let readHandle = try? FileHandle(forReadingFrom: fileURL) else {
-                await self.updateStatus(transferId: transferId, status: .failed, error: "Failed to read file")
+            if fileName.lowercased().hasSuffix(".apk") && adbAvailable {
+                let res = await AdvancedHostManager.shared.installApk(fileURL: fileURL)
+                if res.success {
+                    await self.updateProgress(transferId: transferId, bytesTransferred: fileSize)
+                    await self.updateStatus(transferId: transferId, status: .completed)
+                } else {
+                    await self.updateStatus(transferId: transferId, status: .failed, error: "APK install: \(res.message)")
+                }
                 return
             }
-            defer { try? readHandle.close() }
 
-            let totalChunks = Int32((Int(fileSize) + effectiveChunkSize - 1) / max(effectiveChunkSize, 1))
-
-            let offer = TransferOffer(
-                transferId: transferId,
-                fileName: fileName,
-                fileSizeBytes: fileSize,
-                sha256Checksum: "streamed-binary",
-                totalChunks: totalChunks,
-                chunkSizeBytes: Int64(effectiveChunkSize)
-            )
-
-            var offerEnvelope = ContinuityEnvelope(senderDeviceId: "macos-companion")
-            offerEnvelope.transferOffer = offer
-            try? await session?.sendAsync(envelope: offerEnvelope)
-
-            var offset: Int64 = 0
-            var chunkIdx: Int32 = 0
-
-            while offset < fileSize {
-                let thisChunkSize = Int(min(Int64(effectiveChunkSize), fileSize - offset))
-                guard let chunkBytes = try? readHandle.read(upToCount: thisChunkSize), !chunkBytes.isEmpty else {
-                    break
+            if let activeSession = session {
+                guard let readHandle = try? FileHandle(forReadingFrom: fileURL) else {
+                    await self.updateStatus(transferId: transferId, status: .failed, error: "Failed to read file")
+                    return
                 }
+                defer { try? readHandle.close() }
 
-                let rawChunk = RawBinaryChunk(
+                let totalChunks = Int32((Int(fileSize) + effectiveChunkSize - 1) / max(effectiveChunkSize, 1))
+
+                let offer = TransferOffer(
                     transferId: transferId,
-                    chunkIndex: UInt32(chunkIdx),
-                    chunkTotal: UInt32(totalChunks),
-                    data: chunkBytes
+                    fileName: fileName,
+                    fileSizeBytes: fileSize,
+                    sha256Checksum: "streamed-binary",
+                    totalChunks: totalChunks,
+                    chunkSizeBytes: Int64(effectiveChunkSize)
                 )
 
+                var offerEnvelope = ContinuityEnvelope(senderDeviceId: "macos-companion")
+                offerEnvelope.transferOffer = offer
                 do {
-                    try await session?.sendAsync(binaryChunk: rawChunk)
+                    try await activeSession.sendAsync(envelope: offerEnvelope)
                 } catch {
-                    await self.updateStatus(transferId: transferId, status: .failed, error: error.localizedDescription)
+                    await self.updateStatus(transferId: transferId, status: .failed, error: "Send offer failed: \(error.localizedDescription)")
                     return
                 }
 
-                offset += Int64(chunkBytes.count)
-                chunkIdx += 1
+                var offset: Int64 = 0
+                var chunkIdx: Int32 = 0
 
-                await self.updateProgress(transferId: transferId, bytesTransferred: offset)
+                while offset < fileSize {
+                    let thisChunkSize = Int(min(Int64(effectiveChunkSize), fileSize - offset))
+                    guard let chunkBytes = try? readHandle.read(upToCount: thisChunkSize), !chunkBytes.isEmpty else {
+                        break
+                    }
+
+                    let rawChunk = RawBinaryChunk(
+                        transferId: transferId,
+                        chunkIndex: UInt32(chunkIdx),
+                        chunkTotal: UInt32(totalChunks),
+                        data: chunkBytes
+                    )
+
+                    do {
+                        try await activeSession.sendAsync(binaryChunk: rawChunk)
+                    } catch {
+                        await self.updateStatus(transferId: transferId, status: .failed, error: error.localizedDescription)
+                        return
+                    }
+
+                    offset += Int64(chunkBytes.count)
+                    chunkIdx += 1
+
+                    await self.updateProgress(transferId: transferId, bytesTransferred: offset)
+                }
+
+                let complete = TransferComplete(
+                    transferId: transferId,
+                    verified: true,
+                    finalPathBasename: fileName,
+                    bytesWritten: fileSize
+                )
+                var completeEnvelope = ContinuityEnvelope(senderDeviceId: "macos-companion")
+                completeEnvelope.transferComplete = complete
+                try? await activeSession.sendAsync(envelope: completeEnvelope)
+
+                await self.updateStatus(transferId: transferId, status: .completed)
+            } else if adbAvailable {
+                // High-speed direct ADB push pipeline
+                let path = adbPath
+                let env = adbEnv
+                let target = adbTarget
+
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: path)
+                proc.environment = env
+                var args = ["push", fileURL.path, "/sdcard/Download/\(fileName)"]
+                if let t = target, !t.isEmpty {
+                    args = ["-s", t] + args
+                }
+                proc.arguments = args
+
+                do {
+                    try proc.run()
+                    proc.waitUntilExit()
+                    if proc.terminationStatus == 0 {
+                        await self.updateProgress(transferId: transferId, bytesTransferred: fileSize)
+                        await self.updateStatus(transferId: transferId, status: .completed)
+
+                        // Broadcast Android media scanner so file appears in Downloads app immediately
+                        let scanProc = Process()
+                        scanProc.executableURL = URL(fileURLWithPath: path)
+                        scanProc.environment = env
+                        var scanArgs = ["shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", "file:///sdcard/Download/\(fileName)"]
+                        if let t = target, !t.isEmpty {
+                            scanArgs = ["-s", t] + scanArgs
+                        }
+                        scanProc.arguments = scanArgs
+                        try? scanProc.run()
+                    } else {
+                        await self.updateStatus(transferId: transferId, status: .failed, error: "ADB push failed (exit code \(proc.terminationStatus))")
+                    }
+                } catch {
+                    await self.updateStatus(transferId: transferId, status: .failed, error: error.localizedDescription)
+                }
+            } else {
+                await self.updateStatus(transferId: transferId, status: .failed, error: "No device connected via Wi-Fi or USB")
             }
-
-            let complete = TransferComplete(
-                transferId: transferId,
-                verified: true,
-                finalPathBasename: fileName,
-                bytesWritten: fileSize
-            )
-            var completeEnvelope = ContinuityEnvelope(senderDeviceId: "macos-companion")
-            completeEnvelope.transferComplete = complete
-            try? await session?.sendAsync(envelope: completeEnvelope)
-
-            await self.updateStatus(transferId: transferId, status: .completed)
         }
     }
 
