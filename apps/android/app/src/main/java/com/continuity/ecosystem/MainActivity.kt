@@ -267,6 +267,21 @@ class MainActivity : ComponentActivity() {
                         clipboardManager.copyText(txt)
                     }
                 }
+                when (input.action) {
+                    InputAction.ACTION_NAV_BACK -> {
+                        runOnUiThread { onBackPressedDispatcher.onBackPressed() }
+                    }
+                    InputAction.ACTION_NAV_HOME -> {
+                        try {
+                            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                                addCategory(Intent.CATEGORY_HOME)
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            startActivity(homeIntent)
+                        } catch (_: Exception) {}
+                    }
+                    else -> {}
+                }
             }
             env.sessionRequest?.let { req ->
                 if (req.type == SessionType.SESSION_SCREEN_MIRROR) {

@@ -3,7 +3,7 @@ set -e
 
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_VERSION="$(cat "$WORKSPACE_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
-APP_VERSION="${APP_VERSION:-1.0.3}"
+APP_VERSION="${APP_VERSION:-1.0.4}"
 DIST_DIR="$WORKSPACE_DIR/dist"
 APP_BUNDLE="$DIST_DIR/ContinuityCompanion.app"
 DMG_NAME="ContinuityCompanion-macOS-v$APP_VERSION.dmg"

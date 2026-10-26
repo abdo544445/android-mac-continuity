@@ -215,7 +215,7 @@ public final class AdvancedHostManager: ObservableObject {
                 "--max-fps=60",
                 "--window-title=Continuity Mirror"
             ]
-            let targetSerial = serial ?? self.connectedAdbDevices.first
+            let targetSerial = serial ?? self.resolveActiveDevice()
             if let s = targetSerial, !s.isEmpty {
                 args.append(contentsOf: ["-s", s])
             }
@@ -263,11 +263,51 @@ public final class AdvancedHostManager: ObservableObject {
         isMirroringActive = false
     }
 
+    public func resolveActiveDevice() -> String? {
+        if !connectedAdbDevices.isEmpty {
+            if let ipPort = connectedAdbDevices.first(where: { $0.contains(":") && !$0.contains("._tcp") }) {
+                return ipPort
+            }
+            if let usb = connectedAdbDevices.first(where: { !$0.contains("._tcp") }) {
+                return usb
+            }
+            return connectedAdbDevices.first
+        }
+
+        guard isAdbAvailable, !adbPath.isEmpty else { return nil }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: adbPath)
+        proc.environment = buildProcessEnvironment()
+        proc.arguments = ["devices"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        try? proc.run()
+        proc.waitUntilExit()
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        var list: [String] = []
+        for line in output.components(separatedBy: .newlines).dropFirst() {
+            let parts = line.split(separator: "\t")
+            if parts.count >= 2 && parts[1] == "device" {
+                list.append(String(parts[0]))
+            }
+        }
+        self.connectedAdbDevices = list
+        if let ipPort = list.first(where: { $0.contains(":") && !$0.contains("._tcp") }) {
+            return ipPort
+        }
+        if let usb = list.first(where: { !$0.contains("._tcp") }) {
+            return usb
+        }
+        return list.first
+    }
+
     public func executeAdbCommand(args: [String]) {
         guard isAdbAvailable else { return }
         let path = adbPath
         let env = buildProcessEnvironment()
-        let target = connectedAdbDevices.first
+        let target = resolveActiveDevice()
 
         Task.detached {
             let proc = Process()

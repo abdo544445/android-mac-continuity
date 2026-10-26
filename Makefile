@@ -13,11 +13,12 @@ build-dmg:
 	./scripts/create_dmg.sh
 
 build-android:
-	@echo "🤖 Building Android Debug APK..."
-	cd apps/android && JAVA_HOME=~/.jdk21/Contents/Home ./gradlew assembleDebug
+	@echo "🤖 Building Android Release APK..."
+	cd apps/android && JAVA_HOME=~/.jdk21/Contents/Home ./gradlew assembleRelease
 	@mkdir -p dist
-	@cp apps/android/app/build/outputs/apk/debug/app-debug.apk dist/app-debug.apk
-	@echo "✅ Android APK copied to dist/app-debug.apk"
+	@cp apps/android/app/build/outputs/apk/release/app-release.apk dist/app-release.apk
+	@cp apps/android/app/build/outputs/apk/release/app-release.apk dist/app-debug.apk
+	@echo "✅ Android APK copied to dist/app-release.apk and dist/app-debug.apk"
 
 install-android:
 	@echo "📲 Installing Continuity APK on connected Android device via ADB..."

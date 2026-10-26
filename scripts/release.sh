@@ -15,9 +15,16 @@ fi
 echo "$REL_VERSION" > VERSION
 echo "🚀 Preparing Release v$REL_VERSION..."
 
+# Derive build number (e.g. 1.0.4 -> 4)
+BUILD_NUM=$(echo "$REL_VERSION" | awk -F. '{print ($1*100) + ($2*10) + $3}')
+if [ -z "$BUILD_NUM" ] || [ "$BUILD_NUM" -le 0 ]; then
+    BUILD_NUM=4
+fi
+
 # Sync version into Android build.gradle.kts and SettingsScreen.kt
+sed -i '' "s/versionCode = [0-9]*/versionCode = $BUILD_NUM/" apps/android/app/build.gradle.kts
 sed -i '' "s/versionName = \".*\"/versionName = \"$REL_VERSION\"/" apps/android/app/build.gradle.kts
-sed -i '' "s/text = \"v[0-9.]* (/text = \"v$REL_VERSION (/" apps/android/app/src/main/java/com/continuity/ecosystem/ui/screens/SettingsScreen.kt
+sed -i '' "s/text = \"v[0-9.]* (Build [0-9]*)\"/text = \"v$REL_VERSION (Build $BUILD_NUM)\"/" apps/android/app/src/main/java/com/continuity/ecosystem/ui/screens/SettingsScreen.kt
 
 # Build both platforms
 make build-macos
@@ -28,15 +35,19 @@ APK_OUT="dist/Continuity-Android-v$REL_VERSION.apk"
 MAC_DMG="dist/ContinuityCompanion-macOS-v$REL_VERSION.dmg"
 MAC_ZIP="dist/ContinuityCompanion-macOS-v$REL_VERSION.zip"
 
-cp dist/app-debug.apk "$APK_OUT"
+if [ -f "dist/app-release.apk" ]; then
+    cp dist/app-release.apk "$APK_OUT"
+else
+    cp dist/app-debug.apk "$APK_OUT"
+fi
 
 # Generate GUI DMG Installer
 ./scripts/create_dmg.sh
 
-# Also package ZIP archive
+# Also package ZIP archive using ditto to preserve permissions and macOS bundle metadata
 cd dist
 rm -f "ContinuityCompanion-macOS-v$REL_VERSION.zip"
-zip -r -y "ContinuityCompanion-macOS-v$REL_VERSION.zip" ContinuityCompanion.app
+ditto -c -k --keepParent "ContinuityCompanion.app" "ContinuityCompanion-macOS-v$REL_VERSION.zip"
 cd "$WORKSPACE_DIR"
 
 echo "📦 Created versioned assets:"
@@ -46,7 +57,7 @@ echo "  - $MAC_ZIP"
 
 # Git Commit & Tag
 git add .
-git commit -m "chore(release): bump version to v$REL_VERSION with expanded ecosystem features & DMG installer" || true
+git commit -m "chore(release): bump version to v$REL_VERSION with low-latency mirroring, release APK signing, and navigation fixes" || true
 git tag -fa "v$REL_VERSION" -m "Release v$REL_VERSION"
 git push origin main --tags || true
 

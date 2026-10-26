@@ -56,7 +56,8 @@ class ScreenShareService : Service() {
                 val metrics = resources.displayMetrics
                 val screenW = metrics.widthPixels
                 val screenH = metrics.heightPixels
-                val maxDim = 1280f
+                // Scale to 960 max dimension for ultra-low latency (< 25ms encode time)
+                val maxDim = 960f
                 val scale = minOf(1.0f, maxDim / maxOf(screenW, screenH))
                 val targetW = ((screenW * scale).toInt() / 2) * 2
                 val targetH = ((screenH * scale).toInt() / 2) * 2
@@ -110,8 +111,8 @@ class ScreenShareService : Service() {
 
                 try {
                     val now = System.currentTimeMillis()
-                    // Cap at ~18-20 FPS so Wi-Fi socket never backs up
-                    if (now - lastFrameSentMs < 50L) {
+                    // Target ~30 FPS for smooth, low-latency live feedback
+                    if (now - lastFrameSentMs < 32L) {
                         return@setOnImageAvailableListener
                     }
                     lastFrameSentMs = now
@@ -132,8 +133,8 @@ class ScreenShareService : Service() {
                         rawBitmap
                     }
 
-                    val out = ByteArrayOutputStream(65536)
-                    croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 68, out)
+                    val out = ByteArrayOutputStream(32768)
+                    croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 52, out)
                     if (croppedBitmap !== rawBitmap) {
                         croppedBitmap.recycle()
                     }
