@@ -7,8 +7,7 @@ public struct MirroringView: View {
     @ObservedObject var agent = ConnectionAgent.shared
     @ObservedObject var advancedHost = AdvancedHostManager.shared
     @ObservedObject var clipboardBridge = ClipboardBridge.shared
-    @State private var isMirroringActive = false
-    @State private var selectedResolution = "1080p"
+    @ObservedObject var mirrorManager = MirroringManager.shared
     @State private var isDropTargeted = false
 
     public init() {}
@@ -22,10 +21,20 @@ public struct MirroringView: View {
                     .fontWeight(.bold)
                 Spacer()
 
+                if mirrorManager.isMirroringActive {
+                    Text(String(format: "%.1f FPS", mirrorManager.fps))
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.blue.opacity(0.2))
+                        .foregroundColor(.blue)
+                        .cornerRadius(6)
+                }
+
                 Toggle("Auto-Paste Mac Copies", isOn: $clipboardBridge.autoPasteOnMirror)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                    .help("Automatically paste copied Mac text & images into your mirrored Android/Huawei device")
+                    .help("Automatically paste copied Mac text & images into your mirrored Android device")
 
                 Button(action: {
                     clipboardBridge.sendCurrentClipboard(session: agent.activeSession, triggerPaste: true)
@@ -36,23 +45,27 @@ public struct MirroringView: View {
                 .keyboardShortcut("v", modifiers: [.command, .shift])
                 .help("Push current Mac clipboard (text or screenshot/image) and paste into Android (⇧⌘V)")
 
-                Picker("Resolution", selection: $selectedResolution) {
+                Picker("Resolution", selection: $mirrorManager.selectedResolution) {
                     Text("1080p").tag("1080p")
                     Text("720p").tag("720p")
                 }
                 .frame(width: 110)
 
-                if agent.liveMirrorFrame != nil {
+                if mirrorManager.isMirroringActive || agent.liveMirrorFrame != nil {
                     Button(action: {
-                        agent.liveMirrorFrame = nil
-                        var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
-                        env.sessionStop = SessionStop(sessionId: "mirror", reason: "User stopped")
-                        agent.activeSession?.send(envelope: env)
+                        mirrorManager.stopMirroring(session: agent.activeSession)
                     }) {
                         Label("Stop Wireless Mirror", systemImage: "stop.circle.fill")
                     }
                     .buttonStyle(.bordered)
                     .tint(.red)
+                } else {
+                    Button(action: {
+                        mirrorManager.startMirroring(session: agent.activeSession)
+                    }) {
+                        Label("Start Wireless Mirror", systemImage: "play.circle.fill")
+                    }
+                    .buttonStyle(.bordered)
                 }
 
                 if advancedHost.isScrcpyAvailable {
@@ -80,7 +93,7 @@ public struct MirroringView: View {
             ZStack {
                 Color.black
 
-                if let mirrorImg = agent.liveMirrorFrame {
+                if let mirrorImg = mirrorManager.currentFrame ?? agent.liveMirrorFrame {
                     GeometryReader { geo in
                         Image(nsImage: mirrorImg)
                             .resizable()
@@ -106,74 +119,26 @@ public struct MirroringView: View {
                                         if clickX >= 0 && clickX <= displayedW && clickY >= 0 && clickY <= displayedH {
                                             let normX = Float(clickX / displayedW)
                                             let normY = Float(clickY / displayedH)
-                                            handleMirrorTap(normX: normX, normY: normY)
+                                            mirrorManager.handleTap(normX: normX, normY: normY, session: agent.activeSession)
                                         }
                                     }
                             )
                     }
                 } else {
-                    VStack(spacing: 18) {
-                        Image(systemName: isDropTargeted ? "photo.badge.plus.fill" : "ipad.and.iphone")
-                            .font(.system(size: 60))
-                            .foregroundColor(isDropTargeted ? .blue : .gray)
+                    VStack(spacing: 16) {
+                        Image(systemName: "ipad.and.iphone")
+                            .font(.system(size: 64))
+                            .foregroundColor(.gray)
 
-                        Text(advancedHost.isMirroringActive ? "scrcpy Interactive 60fps Window Active" : "Android / Huawei Mirror & Paste Hub")
+                        Text("Screen Mirroring Standby")
                             .font(.headline)
                             .foregroundColor(.white)
 
-                        if !advancedHost.statusMessage.isEmpty {
-                            Text(advancedHost.statusMessage)
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        }
-
-                        Text("Copy any **Text** or **Image / Screenshot** on your Mac (`⌘C`) and it automatically syncs to your Huawei/Android clipboard — or drag & drop an image right here to paste it directly into the mirrored app!")
+                        Text("Click 'Start Wireless Mirror' or 'Launch Mirror (60fps)' to begin low-latency screen control.")
                             .font(.subheadline)
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
-                            .frame(maxWidth: 480)
-
-                        HStack(spacing: 14) {
-                            Button("Start Wireless Mirror") {
-                                requestPublicMirror()
-                            }
-                            .buttonStyle(.borderedProminent)
-
-                            if advancedHost.isScrcpyAvailable && !advancedHost.isMirroringActive {
-                                Button("Launch Interactive USB/ADB Window (scrcpy)") {
-                                    advancedHost.startScrcpy()
-                                }
-                                .buttonStyle(.bordered)
-                            }
-
-                            Button {
-                                clipboardBridge.sendCurrentClipboard(session: agent.activeSession, triggerPaste: true)
-                            } label: {
-                                Label("Paste Mac Clipboard to Tablet Now", systemImage: "sparkles.rectangle.stack.fill")
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        if let img = clipboardBridge.lastSharedImage {
-                            HStack(spacing: 10) {
-                                Image(nsImage: img)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 44, height: 44)
-                                    .cornerRadius(6)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Last Synced Clipboard: \(clipboardBridge.lastSharedType)")
-                                        .font(.caption)
-                                        .foregroundColor(.green)
-                                    Text("Ready to paste in Huawei Notes, Telegram, Docs, etc.")
-                                        .font(.caption2)
-                                        .foregroundColor(.gray)
-                                }
-                            }
-                            .padding(10)
-                            .background(Color.white.opacity(0.08))
-                            .cornerRadius(10)
-                        }
+                            .frame(maxWidth: 420)
                     }
                     .padding()
                 }
@@ -193,13 +158,13 @@ public struct MirroringView: View {
             // Floating Navigation Control Bar
             HStack(spacing: 32) {
                 navButton(icon: "arrow.uturn.backward", label: "Back") {
-                    sendInput(action: .navBack)
+                    mirrorManager.sendInput(action: .navBack, session: agent.activeSession)
                 }
                 navButton(icon: "circle", label: "Home") {
-                    sendInput(action: .navHome)
+                    mirrorManager.sendInput(action: .navHome, session: agent.activeSession)
                 }
                 navButton(icon: "square", label: "Recents") {
-                    sendInput(action: .navRecents)
+                    mirrorManager.sendInput(action: .navRecents, session: agent.activeSession)
                 }
                 Divider().frame(height: 24)
                 navButton(icon: "doc.on.clipboard", label: "Paste (⌘V)") {
@@ -207,13 +172,13 @@ public struct MirroringView: View {
                 }
                 Divider().frame(height: 24)
                 navButton(icon: "power", label: "Power") {
-                    sendKey(code: 26) // KEYCODE_POWER
+                    mirrorManager.sendKey(code: 26, session: agent.activeSession) // KEYCODE_POWER
                 }
                 navButton(icon: "speaker.wave.2", label: "Vol+") {
-                    sendKey(code: 24) // KEYCODE_VOLUME_UP
+                    mirrorManager.sendKey(code: 24, session: agent.activeSession) // KEYCODE_VOLUME_UP
                 }
                 navButton(icon: "speaker.wave.1", label: "Vol-") {
-                    sendKey(code: 25) // KEYCODE_VOLUME_DOWN
+                    mirrorManager.sendKey(code: 25, session: agent.activeSession) // KEYCODE_VOLUME_DOWN
                 }
             }
             .padding(.vertical, 12)
@@ -250,51 +215,5 @@ public struct MirroringView: View {
         }
         .buttonStyle(.plain)
         .foregroundColor(.primary)
-    }
-
-    private func requestPublicMirror() {
-        var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
-        env.sessionRequest = SessionRequest(
-            type: .screenMirror,
-            width: selectedResolution == "1080p" ? 1920 : 1280,
-            height: selectedResolution == "1080p" ? 1080 : 720,
-            targetFps: 30,
-            codec: "H264"
-        )
-        agent.activeSession?.send(envelope: env)
-    }
-
-    private func sendInput(action: InputAction) {
-        var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
-        env.inputEvent = InputEvent(sessionId: "mirror", action: action)
-        agent.activeSession?.send(envelope: env)
-
-        let keycode: Int?
-        switch action {
-        case .navBack: keycode = 4
-        case .navHome: keycode = 3
-        case .navRecents: keycode = 187
-        default: keycode = nil
-        }
-        if let kc = keycode {
-            advancedHost.executeAdbCommand(args: ["shell", "input", "keyevent", "\(kc)"])
-        }
-    }
-
-    private func sendKey(code: Int32) {
-        var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
-        env.inputEvent = InputEvent(sessionId: "mirror", action: .keyDown, keyCode: code)
-        agent.activeSession?.send(envelope: env)
-        advancedHost.executeAdbCommand(args: ["shell", "input", "keyevent", "\(code)"])
-    }
-
-    private func handleMirrorTap(normX: Float, normY: Float) {
-        var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
-        env.inputEvent = InputEvent(sessionId: "mirror", action: .down, normalizedX: normX, normalizedY: normY)
-        agent.activeSession?.send(envelope: env)
-
-        let targetX = Int(normX * 1080)
-        let targetY = Int(normY * 2400)
-        advancedHost.executeAdbCommand(args: ["shell", "input", "tap", "\(targetX)", "\(targetY)"])
     }
 }

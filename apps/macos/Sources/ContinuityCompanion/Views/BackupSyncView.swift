@@ -2,15 +2,11 @@ import SwiftUI
 import AppKit
 
 public struct BackupSyncView: View {
-    @State private var backupDirectory: URL = {
-        let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first!
-        return pictures.appendingPathComponent("ContinuityBackup", isDirectory: true)
-    }()
+    @ObservedObject var photoBackupManager = PhotoBackupManager.shared
+    @ObservedObject var folderSyncEngine = FolderSyncEngine.shared
     @State private var wifiOnly = true
     @State private var chargingOnly = true
     @State private var autoSyncOnConnect = true
-    @State private var lastBackupDate = "Never"
-    @State private var backedUpCount = 0
 
     public init() {}
 
@@ -29,16 +25,15 @@ public struct BackupSyncView: View {
                         .foregroundColor(.blue)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Incremental Photo Backup")
+                        Text("Incremental Photo Backup (\(photoBackupManager.backedUpCount) items)")
                             .font(.headline)
-                        Text("Copies new photos and videos without overwriting or deleting existing files on your phone or Mac.")
+                        Text("Last backup: \(photoBackupManager.lastBackupDate). Automatically deduplicates via SHA-256.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
                     Spacer()
                     Button("Sync Now") {
-                        backedUpCount += 14
-                        lastBackupDate = "Just now"
+                        photoBackupManager.refreshStatistics()
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -54,7 +49,7 @@ public struct BackupSyncView: View {
                     HStack {
                         Image(systemName: "folder.fill")
                             .foregroundColor(.yellow)
-                        Text(backupDirectory.path)
+                        Text(photoBackupManager.backupDirectory.path)
                             .font(.system(size: 13, design: .monospaced))
                             .lineLimit(1)
                         Spacer()
@@ -82,8 +77,8 @@ public struct BackupSyncView: View {
 
                 // Stats
                 HStack(spacing: 24) {
-                    statBox(title: "Last Backup", value: lastBackupDate)
-                    statBox(title: "Backed Up Media", value: "\(backedUpCount) items")
+                    statBox(title: "Last Backup", value: photoBackupManager.lastBackupDate)
+                    statBox(title: "Backed Up Media", value: "\(photoBackupManager.backedUpCount) items")
                     statBox(title: "Sync Mode", value: "Non-destructive")
                 }
             }
@@ -112,7 +107,7 @@ public struct BackupSyncView: View {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
-            backupDirectory = url
+            photoBackupManager.setBackupDirectory(url)
         }
     }
 }

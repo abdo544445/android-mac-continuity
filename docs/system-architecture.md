@@ -1,12 +1,12 @@
 # System Architecture Document
 **Android + macOS Continuity Ecosystem**
-*Version 1.0 — Architectural Blueprint*
+*Version 1.0.4 — Architectural Blueprint & Subsystem Reference*
 
 ---
 
 ## 1. High-Level Architecture Overview
 
-The system operates on a decentralized, peer-to-peer model over the local area network. Devices advertise availability via mDNS/Bonjour, establish mutual TLS / AES-GCM encrypted transport sockets, and multiplex application-level messages across a single framing layer.
+The system operates on a decentralized, peer-to-peer model over the local area network. Devices advertise availability via mDNS/Bonjour and UDP broadcast, establish mutual ECDH P-256 / AES-256-GCM encrypted transport sockets, and multiplex application-level messages across a single length-prefixed framing layer (`CNT1`).
 
 ```
 ┌────────────────────────────────────────┐       ┌────────────────────────────────────────┐
@@ -18,29 +18,32 @@ The system operates on a decentralized, peer-to-peer model over the local area n
 │                     │                  │       │                     │                  │
 │  ┌──────────────────▼───────────────┐  │       │  ┌──────────────────▼───────────────┐  │
 │  │     Application Managers         │  │       │  │     Application Services         │  │
-│  │  • FileTransferEngine            │  │       │  │  • FileTransferManager (SAF)     │  │
+│  │  • FileTransferEngine / Sync     │  │       │  │  • FileTransferManager (SAF)     │  │
 │  │  • NotificationBridge            │  │       │  │  • ContinuityNotificationListener│  │
 │  │  • ClipboardBridge               │  │       │  │  • ClipboardSyncManager          │  │
-│  │  • ScreenViewer / CameraReceiver │  │       │  │  • MediaProjection / CameraX     │  │
-│  │  • AdvancedHost (ADB/scrcpy)     │  │       │  │  • WorkManager PhotoBackupWorker │  │
+│  │  • CameraStreamManager           │  │       │  │  • CameraStreamingService        │  │
+│  │  • MirroringManager              │  │       │  │  • ScreenShareService / MediaProj│  │
+│  │  • PhotoBackupManager            │  │       │  │  • PhotoBackupWorker (WorkMgr)   │  │
+│  │  • PairingManager                │  │       │  │  • PairingManager                │  │
+│  │  • AdvancedHost (ADB/scrcpy)     │  │       │  │  • HostControlHandler            │  │
 │  └──────────────────┬───────────────┘  │       │  └──────────────────┬───────────────┘  │
 │                     │                  │       │                     │                  │
 │  ┌──────────────────▼───────────────┐  │       │  ┌──────────────────▼───────────────┐  │
 │  │    ContinuityProtocol Engine     │  │       │  │    ContinuityCore Engine         │  │
 │  │  • Length-Prefixed Binary Framing│  │       │  │  • Binary Framing Stream Decoder │  │
-│  │  • Protobuf Envelope Serializer  │  │       │  │  • Protobuf Envelope Serializer  │  │
-│  │  • CryptoKit (AES-256-GCM / ECDH)│  │       │  │  • Keystore / AES-GCM / ECDH     │  │
+│  │  • JSON/Protobuf Serialization   │  │       │  │  • JSON/Protobuf Serialization   │  │
+│  │  • CryptoKit (AES-256-GCM / ECDH)│  │       │  │  • CryptoManager (AES-GCM / ECDH)│  │
 │  └──────────────────┬───────────────┘  │       │  └──────────────────┬───────────────┘  │
 │                     │                  │       │                     │                  │
 │  ┌──────────────────▼───────────────┐  │       │  ┌──────────────────▼───────────────┐  │
 │  │   Network.framework (NWListener/ │  │       │  │   Java NIO / SecureSocket / NSD  │  │
-│  │   NWConnection) & Bonjour        │  │       │  │   (mDNS discovery & TLS socket)  │  │
+│  │   NWConnection) & LanDiscovery   │  │       │  │   & LanDiscoveryManager (UDP+NSD)│  │
 │  └──────────────────┬───────────────┘  │       │  └──────────────────┬───────────────┘  │
 └─────────────────────┼──────────────────┘       └─────────────────────┼──────────────────┘
                       │                                                │
                       └═══════════ Encrypted Local TCP Socket ═════════┘
                                    Bonjour: _continuity._tcp
-                                   Port: 52400 (Dynamic)
+                                   Ports: 52400-52401 (TCP), 52402 (UDP)
 ```
 
 ---
@@ -48,17 +51,22 @@ The system operates on a decentralized, peer-to-peer model over the local area n
 ## 2. Component Breakdown
 
 ### 2.1 macOS Subsystems
-- **CompanionApp / MenuBar**: Provides real-time status menu, drop zone for immediate file dispatch, battery HUD, and full settings dashboard.
-- **ConnectionAgent**: Encapsulates `Network.framework` `NWListener` and `NWBrowser`. Automatically discovers Android nodes on the local Wi-Fi subnet.
+- **CompanionApp / MenuBar**: Provides real-time status menu, drop zone for immediate file dispatch, battery HUD, and settings dashboard.
+- **ConnectionAgent & LanDiscoveryService**: Encapsulates `Network.framework` `NWListener`, `NWBrowser`, and UDP broadcast probing on port 52402. Discovers and reconnects Android nodes on the local Wi-Fi subnet.
+- **PairingManager**: Manages pairing sessions, visual 6-digit PIN challenges, QR token generation (`continuity://pair?...`), session key commitment, and trust state transitions within `DeviceRegistry`.
 - **FileTransferEngine**: Manages asynchronous file sending and receiving queues. Implements 512KB chunked streaming, SHA-256 chunk validation, automatic resume offset negotiation, and write sandboxing into `~/Downloads/Continuity/`.
+- **PhotoBackupManager**: Incremental media backup receiver on macOS. Organizes received photos into `~/Pictures/ContinuityBackup/YYYY/MM/`, performs SHA-256 deduplication against existing local assets, and tracks sync telemetry.
+- **CameraStreamManager**: Dedicated observable camera receiver. Handles frame buffer ingestion, H.264/JPEG decoding, FPS calculation, resolution negotiation, and CoreMediaIO virtual camera relaying.
+- **MirroringManager**: Dedicated observable screen mirroring manager. Manages low-latency display frame rendering, latency telemetry, remote touch/mouse coordinate translation, and stream lifecycle state.
 - **NotificationBridge**: Receives incoming Android notifications, converts them into macOS `UNUserNotificationCenter` requests, and forwards user inline replies back to Android.
 - **ClipboardBridge**: Monitors `NSPasteboard.general` with privacy filters (skipping sensitive password fields) and transmits updates on user action.
-- **ScreenViewer & CameraExtension**: Decodes incoming H.264 video streams. CameraExtension registers as a macOS `CMIOExtension` virtual camera.
 - **AdvancedHost**: Manages local `scrcpy` and ADB binaries, establishing reverse ADB port forwarding and low-latency input capture.
 
 ### 2.2 Android Subsystems
-- **DeviceManager & SecurityManager**: Manages device UUID and asymmetric key pairs generated via `AndroidKeyStore`. Persists paired Mac certificates securely.
-- **NetworkDiscovery & ConnectionService**: Android Network Service Discovery (NSD) for zero-config mDNS resolution and background connection lifecycle management.
+- **CryptoManager & DeviceIdentity**: Manages device UUID, persistent ECDH P-256 keypairs in `AndroidKeyStore`, RFC 5869 HKDF key derivation, HMAC-SHA256 authentication tags, and AES-256-GCM encryption/decryption matching Apple `CryptoKit.AES.GCM.SealedBox.combined`.
+- **LanDiscoveryManager & ConnectionService**: Android Network Service Discovery (NSD) combined with UDP broadcast discovery (port 52402) for zero-config mDNS resolution and background connection lifecycle management.
+- **PairingManager**: Manages camera-based QR code scanning, visual 6-digit PIN verification, mutual key derivation, and device trust persistence.
+- **HostControlHandler**: Handles remote pointer moves, mouse clicks, keyboard text input, and hardware navigation key codes (Home, Back, Recent Apps, Volume).
 - **FileTransferManager**: Interacts with Android Storage Access Framework (`DocumentsContract`) and `MediaStore` to stream files without requesting broad external storage permissions.
 - **NotificationListenerService**: Reads permitted status-bar notifications and intercepts `RemoteInput` reply actions to execute replies sent from macOS.
 - **ScreenShareService**: Manages user-granted `MediaProjection` captures, feeding video frames into Android's hardware `MediaCodec` (AVC/H.264).

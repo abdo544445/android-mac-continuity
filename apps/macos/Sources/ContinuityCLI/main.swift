@@ -151,6 +151,86 @@ struct ContinuityCLI {
             assert(false, "Binary chunk test failed: \(error)")
         }
 
+        // Test 6: Shared Envelopes Fixture Contract
+        do {
+            let possiblePaths = [
+                "../../shared/protocol/fixtures/sample_envelopes.json",
+                "shared/protocol/fixtures/sample_envelopes.json",
+                "../shared/protocol/fixtures/sample_envelopes.json"
+            ]
+            var fixtureData: Data?
+            for p in possiblePaths {
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: p)) {
+                    fixtureData = data
+                    break
+                }
+            }
+            if let data = fixtureData,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let testCases = json["test_cases"] as? [[String: Any]] {
+                var allPassed = true
+                for tc in testCases {
+                    guard let name = tc["name"] as? String,
+                          let envelopeDict = tc["envelope"] as? [String: Any],
+                          let envData = try? JSONSerialization.data(withJSONObject: envelopeDict) else {
+                        allPassed = false
+                        break
+                    }
+                    let snakeDecoder = JSONDecoder()
+                    snakeDecoder.keyDecodingStrategy = .convertFromSnakeCase
+                    guard let env = try? snakeDecoder.decode(ContinuityEnvelope.self, from: envData) else {
+                        print("  ❌ Failed decoding fixture envelope for: \(name)")
+                        allPassed = false
+                        break
+                    }
+                    let encoder = FrameEncoder()
+                    let decoder = FrameDecoder()
+                    let frame = try encoder.encode(envelope: env)
+                    decoder.append(data: frame)
+                    guard let decodedEnv = try decoder.nextEnvelope() else {
+                        allPassed = false
+                        break
+                    }
+                    if decodedEnv.requestId != env.requestId || decodedEnv.senderDeviceId != env.senderDeviceId {
+                        allPassed = false
+                        break
+                    }
+                }
+                assert(allPassed, "Sample envelopes fixture contract verification round-trip")
+            } else {
+                assert(false, "Could not load sample_envelopes.json fixture")
+            }
+        } catch {
+            assert(false, "Sample envelopes contract error: \(error)")
+        }
+
+        // Test 7: Shared Features Catalog Contract
+        do {
+            let possiblePaths = [
+                "../../shared/protocol/capabilities/features.json",
+                "shared/protocol/capabilities/features.json",
+                "../shared/protocol/capabilities/features.json"
+            ]
+            var catalogData: Data?
+            for p in possiblePaths {
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: p)) {
+                    catalogData = data
+                    break
+                }
+            }
+            if let data = catalogData,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let name = json["name"] as? String,
+               name == "ContinuityCapabilityCatalog",
+               let editions = json["editions"] as? [String: Any],
+               editions["public"] != nil,
+               editions["advanced"] != nil {
+                assert(true, "Capabilities catalog features.json contract verification")
+            } else {
+                assert(false, "Could not load or validate features.json")
+            }
+        }
+
         print("\n📊 Test Results: \(passed) Passed, \(failed) Failed")
         if failed > 0 {
             exit(1)

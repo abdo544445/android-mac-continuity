@@ -187,6 +187,11 @@ public final class FrameDecoder: @unchecked Sendable {
                     let envelope = try jsonDecoder.decode(ContinuityEnvelope.self, from: payloadData)
                     return .envelope(envelope)
                 } catch {
+                    let snakeDecoder = JSONDecoder()
+                    snakeDecoder.keyDecodingStrategy = .convertFromSnakeCase
+                    if let envelope = try? snakeDecoder.decode(ContinuityEnvelope.self, from: payloadData) {
+                        return .envelope(envelope)
+                    }
                     throw FramingError.decodingFailed(error.localizedDescription)
                 }
             }

@@ -41,14 +41,9 @@ else
     cp dist/app-debug.apk "$APK_OUT"
 fi
 
-# Generate GUI DMG Installer
+# Generate GUI DMG Installer and Gatekeeper-friendly ZIP package
 ./scripts/create_dmg.sh
-
-# Also package ZIP archive using ditto to preserve permissions and macOS bundle metadata
-cd dist
-rm -f "ContinuityCompanion-macOS-v$REL_VERSION.zip"
-ditto -c -k --keepParent "ContinuityCompanion.app" "ContinuityCompanion-macOS-v$REL_VERSION.zip"
-cd "$WORKSPACE_DIR"
+./scripts/create_zip.sh
 
 echo "📦 Created versioned assets:"
 echo "  - $APK_OUT"

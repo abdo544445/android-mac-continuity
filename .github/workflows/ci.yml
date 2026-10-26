@@ -30,6 +30,12 @@ jobs:
           cd apps/macos
           swift run ContinuityCLI test
 
+      - name: Package macOS App, ZIP and DMG
+        run: |
+          ./scripts/bundle_macos_app.sh
+          ./scripts/create_zip.sh
+          ./scripts/create_dmg.sh
+
   integration-tests:
     name: End-to-End Handshake & Transfer Suite
     runs-on: ubuntu-latest

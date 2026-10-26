@@ -6,11 +6,47 @@ public enum DevicePlatform: String, Codable, Sendable {
     case unspecified = "PLATFORM_UNSPECIFIED"
     case macOS = "PLATFORM_MACOS"
     case android = "PLATFORM_ANDROID"
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let intVal = try? container.decode(Int.self) {
+            switch intVal {
+            case 1: self = .macOS
+            case 2: self = .android
+            default: self = .unspecified
+            }
+        } else if let str = try? container.decode(String.self) {
+            switch str.uppercased() {
+            case "PLATFORM_MACOS", "MACOS", "1": self = .macOS
+            case "PLATFORM_ANDROID", "ANDROID", "2": self = .android
+            default: self = .unspecified
+            }
+        } else {
+            self = .unspecified
+        }
+    }
 }
 
 public enum DeviceEdition: String, Codable, Sendable {
     case publicEdition = "EDITION_PUBLIC"
     case advanced = "EDITION_ADVANCED"
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let intVal = try? container.decode(Int.self) {
+            switch intVal {
+            case 1: self = .advanced
+            default: self = .publicEdition
+            }
+        } else if let str = try? container.decode(String.self) {
+            switch str.uppercased() {
+            case "EDITION_ADVANCED", "ADVANCED", "1": self = .advanced
+            default: self = .publicEdition
+            }
+        } else {
+            self = .publicEdition
+        }
+    }
 }
 
 public enum ThermalState: String, Codable, Sendable {
@@ -86,7 +122,7 @@ public struct PairRequest: Codable, Sendable, Equatable {
     public var pairingPin: String
     public var identitySignatureBase64: String?
 
-    public init(deviceId: String, deviceName: String, platform: DevicePlatform, edition: DeviceEdition, ephemeralPublicKeyBase64: String, pairingPin: String, identitySignatureBase64: String? = nil) {
+    public init(deviceId: String, deviceName: String, platform: DevicePlatform = .android, edition: DeviceEdition = .publicEdition, ephemeralPublicKeyBase64: String = "", pairingPin: String, identitySignatureBase64: String? = nil) {
         self.deviceId = deviceId
         self.deviceName = deviceName
         self.platform = platform
@@ -94,6 +130,17 @@ public struct PairRequest: Codable, Sendable, Equatable {
         self.ephemeralPublicKeyBase64 = ephemeralPublicKeyBase64
         self.pairingPin = pairingPin
         self.identitySignatureBase64 = identitySignatureBase64
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.deviceId = try container.decode(String.self, forKey: .deviceId)
+        self.deviceName = try container.decode(String.self, forKey: .deviceName)
+        self.platform = try container.decodeIfPresent(DevicePlatform.self, forKey: .platform) ?? .android
+        self.edition = try container.decodeIfPresent(DeviceEdition.self, forKey: .edition) ?? .publicEdition
+        self.ephemeralPublicKeyBase64 = try container.decodeIfPresent(String.self, forKey: .ephemeralPublicKeyBase64) ?? ""
+        self.pairingPin = try container.decode(String.self, forKey: .pairingPin)
+        self.identitySignatureBase64 = try container.decodeIfPresent(String.self, forKey: .identitySignatureBase64)
     }
 }
 
@@ -199,6 +246,17 @@ public struct DeviceStatus: Codable, Sendable, Equatable {
         self.totalStorageBytes = totalStorageBytes
         self.thermalState = thermalState
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.batteryPercentage = try container.decode(Int32.self, forKey: .batteryPercentage)
+        self.isCharging = try container.decode(Bool.self, forKey: .isCharging)
+        self.isWifiConnected = try container.decode(Bool.self, forKey: .isWifiConnected)
+        self.wifiSsid = try container.decode(String.self, forKey: .wifiSsid)
+        self.freeStorageBytes = try container.decode(Int64.self, forKey: .freeStorageBytes)
+        self.totalStorageBytes = try container.decode(Int64.self, forKey: .totalStorageBytes)
+        self.thermalState = try container.decodeIfPresent(ThermalState.self, forKey: .thermalState) ?? .normal
+    }
 }
 
 public struct TransferOffer: Codable, Sendable, Equatable {
@@ -220,6 +278,18 @@ public struct TransferOffer: Codable, Sendable, Equatable {
         self.totalChunks = totalChunks
         self.chunkSizeBytes = chunkSizeBytes
         self.isDirectoryBundle = isDirectoryBundle
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.transferId = try container.decode(String.self, forKey: .transferId)
+        self.fileName = try container.decode(String.self, forKey: .fileName)
+        self.fileSizeBytes = try container.decode(Int64.self, forKey: .fileSizeBytes)
+        self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType) ?? "application/octet-stream"
+        self.sha256Checksum = try container.decode(String.self, forKey: .sha256Checksum)
+        self.totalChunks = try container.decode(Int32.self, forKey: .totalChunks)
+        self.chunkSizeBytes = try container.decodeIfPresent(Int64.self, forKey: .chunkSizeBytes) ?? 524288
+        self.isDirectoryBundle = try container.decodeIfPresent(Bool.self, forKey: .isDirectoryBundle) ?? false
     }
 }
 

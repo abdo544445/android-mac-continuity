@@ -3,10 +3,7 @@ import ContinuityProtocol
 
 public struct CameraView: View {
     @ObservedObject var agent = ConnectionAgent.shared
-    @State private var isStreaming = false
-    @State private var selectedLens = "BACK"
-    @State private var selectedResolution = "1080p"
-    @State private var isTorchOn = false
+    @ObservedObject var cameraManager = CameraStreamManager.shared
 
     public init() {}
 
@@ -19,11 +16,21 @@ public struct CameraView: View {
                     .fontWeight(.bold)
                 Spacer()
 
+                if cameraManager.isStreaming {
+                    Text(String(format: "%.1f FPS", cameraManager.fps))
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.green.opacity(0.2))
+                        .foregroundColor(.green)
+                        .cornerRadius(6)
+                }
+
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(isStreaming ? Color.green : Color.gray)
+                        .fill(cameraManager.isStreaming ? Color.green : Color.gray)
                         .frame(width: 8, height: 8)
-                    Text("CoreMediaIO Virtual Camera: \(isStreaming ? "Active" : "Ready")")
+                    Text("CoreMediaIO Virtual Camera: \(cameraManager.isStreaming ? "Active" : "Ready")")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -32,8 +39,8 @@ public struct CameraView: View {
                 .background(Color(NSColor.controlBackgroundColor))
                 .cornerRadius(12)
 
-                Button(action: { toggleStreaming() }) {
-                    Label(isStreaming ? "Stop Camera" : "Start Camera", systemImage: isStreaming ? "video.slash.fill" : "video.fill")
+                Button(action: { cameraManager.toggleStreaming(session: agent.activeSession) }) {
+                    Label(cameraManager.isStreaming ? "Stop Camera" : "Start Camera", systemImage: cameraManager.isStreaming ? "video.slash.fill" : "video.fill")
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -46,7 +53,7 @@ public struct CameraView: View {
             ZStack {
                 Color.black
 
-                if let camImg = agent.liveCameraFrame {
+                if let camImg = cameraManager.currentFrame ?? agent.liveCameraFrame {
                     Image(nsImage: camImg)
                         .resizable()
                         .scaledToFit()
@@ -55,13 +62,13 @@ public struct CameraView: View {
                     VStack(spacing: 16) {
                         Image(systemName: "camera.circle.fill")
                             .font(.system(size: 64))
-                            .foregroundColor(isStreaming ? .green : .gray)
+                            .foregroundColor(cameraManager.isStreaming ? .green : .gray)
 
-                        Text(isStreaming ? "Connecting to Device Camera..." : "Camera Ready")
+                        Text(cameraManager.isStreaming ? "Connecting to Device Camera..." : "Camera Ready")
                             .font(.headline)
                             .foregroundColor(.white)
 
-                        Text("Use your Huawei / Android device camera as a crystal-clear high-definition webcam for macOS.")
+                        Text("Use your Android device camera as a crystal-clear high-definition webcam for macOS.")
                             .font(.subheadline)
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
@@ -76,46 +83,25 @@ public struct CameraView: View {
 
             // Camera Controls Bar
             HStack(spacing: 24) {
-                Picker("Lens", selection: $selectedLens) {
+                Picker("Lens", selection: $cameraManager.selectedLens) {
                     Text("Rear Camera (Ultra HD)").tag("BACK")
                     Text("Front Camera (Selfie)").tag("FRONT")
                 }
                 .frame(width: 220)
 
-                Picker("Resolution", selection: $selectedResolution) {
+                Picker("Resolution", selection: $cameraManager.selectedResolution) {
                     Text("1080p (Full HD)").tag("1080p")
                     Text("720p (HD)").tag("720p")
                 }
                 .frame(width: 160)
 
-                Toggle("Torch / Flash", isOn: $isTorchOn)
+                Toggle("Torch / Flash", isOn: $cameraManager.isTorchOn)
                     .toggleStyle(.switch)
-                    .disabled(selectedLens == "FRONT")
+                    .disabled(cameraManager.selectedLens == "FRONT")
             }
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity)
             .background(Color(NSColor.windowBackgroundColor))
-        }
-    }
-
-    private func toggleStreaming() {
-        isStreaming.toggle()
-        if isStreaming {
-            var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
-            env.sessionRequest = SessionRequest(
-                type: .cameraStream,
-                width: selectedResolution == "1080p" ? 1920 : 1280,
-                height: selectedResolution == "1080p" ? 1080 : 720,
-                targetFps: 30,
-                codec: "H264",
-                cameraLens: selectedLens
-            )
-            agent.activeSession?.send(envelope: env)
-        } else {
-            agent.liveCameraFrame = nil
-            var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
-            env.sessionStop = SessionStop(sessionId: "camera", reason: "User stopped")
-            agent.activeSession?.send(envelope: env)
         }
     }
 }

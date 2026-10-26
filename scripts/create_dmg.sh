@@ -23,6 +23,11 @@ mkdir -p "$STAGE_DIR"
 # Copy the app bundle
 cp -R "$APP_BUNDLE" "$STAGE_DIR/ContinuityCompanion.app"
 
+# Copy non-technical onboarding guide
+if [ -f "$WORKSPACE_DIR/resources/How to Open.html" ]; then
+    cp "$WORKSPACE_DIR/resources/How to Open.html" "$STAGE_DIR/How to Open.html"
+fi
+
 # Strip quarantine and extended attributes from stage
 xattr -cr "$STAGE_DIR/ContinuityCompanion.app" 2>/dev/null || true
 

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How to Open Continuity Companion</title>
+  <style>
+    :root {
+      --bg: #f5f5f7;
+      --card-bg: #ffffff;
+      --text: #1d1d1f;
+      --text-muted: #86868b;
+      --accent: #0071e3;
+      --accent-hover: #0077ed;
+      --border: #d2d2d7;
+      --warning: #ff9500;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #000000;
+        --card-bg: #1c1c1e;
+        --text: #f5f5f7;
+        --text-muted: #a1a1a6;
+        --accent: #2997ff;
+        --accent-hover: #40a9ff;
+        --border: #38383a;
+        --warning: #ff9f0a;
+      }
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 40px 20px;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 540px;
+      width: 100%;
+      background: var(--card-bg);
+      border-radius: 20px;
+      padding: 36px 32px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+      border: 1px solid var(--border);
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .icon {
+      font-size: 44px;
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin: 0 0 8px 0;
+    }
+    .subtitle {
+      font-size: 15px;
+      color: var(--text-muted);
+      margin: 0;
+    }
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      background: var(--bg);
+      padding: 16px;
+      border-radius: 12px;
+    }
+    .step-number {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .step-content {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .step-content strong {
+      font-weight: 600;
+    }
+    .highlight-warning {
+      color: var(--warning);
+      font-weight: 600;
+    }
+    .action-container {
+      text-align: center;
+      margin-top: 24px;
+    }
+    .btn {
+      display: inline-block;
+      background: var(--accent);
+      color: #ffffff !important;
+      font-size: 15px;
+      font-weight: 600;
+      padding: 14px 24px;
+      border-radius: 10px;
+      text-decoration: none;
+      transition: background 0.2s ease, transform 0.1s ease;
+      box-shadow: 0 4px 12px rgba(0, 113, 227, 0.3);
+    }
+    .btn:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+    .btn:active {
+      transform: translateY(1px);
+    }
+    .footer {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="icon">🚀</div>
+      <h1>Opening Continuity Companion</h1>
+      <p class="subtitle">Quick 3-step guide for macOS Sonoma &amp; Sequoia</p>
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          Drag <strong>ContinuityCompanion.app</strong> into your <strong>Applications</strong> folder and double-click to launch it.
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          When macOS displays the <em>"Not Opened"</em> Gatekeeper dialog, click <strong>Done</strong>.<br>
+          <span class="highlight-warning">(Do NOT click Move to Trash)</span>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          Click the button below to jump straight to <strong>Privacy &amp; Security</strong> settings, scroll to the bottom, and click <strong>Open Anyway</strong>.
+        </div>
+      </div>
+    </div>
+
+    <div class="action-container">
+      <a class="btn" href="x-apple.systempreferences:com.apple.preference.security">
+        Open Privacy &amp; Security Settings
+      </a>
+    </div>
+
+    <div class="footer">
+      This one-time confirmation is standard for independent macOS applications.<br>
+      Continuity Companion runs 100% locally with zero cloud telemetry.
+    </div>
+  </div>
+</body>
+</html>

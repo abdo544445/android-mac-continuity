@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 import ContinuityProtocol
 
-public struct PendingPairProposal: Identifiable, Equatable {
+public struct PendingPairProposal: Identifiable, Equatable, @unchecked Sendable {
     public var id: String { deviceId }
     public let deviceId: String
     public let deviceName: String

@@ -45,6 +45,8 @@ class ConnectionService : Service() {
     private var sessionToken: String? = null
     private val writeMutex = Mutex()
 
+    val hostControlHandler: HostControlHandler by lazy { HostControlHandler(this) }
+
     var onConnectionStateChanged: ((Boolean) -> Unit)? = null
     var onEnvelopeReceived: ((ContinuityEnvelope) -> Unit)? = null
     var onBinaryChunkReceived: ((RawBinaryChunk) -> Unit)? = null
@@ -222,6 +224,7 @@ class ConnectionService : Service() {
                     when (frame) {
                         is DecodedFrame.Envelope -> {
                             frame.envelope.sessionToken?.let { sessionToken = it }
+                            frame.envelope.inputEvent?.let { hostControlHandler.handleInputEvent(it) }
                             scope.launch(Dispatchers.Main) {
                                 onEnvelopeReceived?.invoke(frame.envelope)
                             }

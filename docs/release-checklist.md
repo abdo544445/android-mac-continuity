@@ -26,7 +26,11 @@
 - [ ] **Developer ID Application Certificate**: Valid Apple Developer ID Application certificate configured.
 - [ ] **Hardened Runtime**: Enabled on all executable targets and framework bundles.
 - [ ] **Notarization**: Submitted and successfully stapled via `xcrun notarytool`.
-- [ ] **Disk Image (`.dmg`)**: Styled installer DMG with Applications folder symlink and auto-updater integration (Sparkle).
+- [ ] **Disk Image (`.dmg`) & Gatekeeper-Friendly `.zip`**:
+  - [ ] Built-in `create_zip.sh` produces `ContinuityCompanion-macOS-v${VERSION}.zip` with `ContinuityCompanion.app`, `How to Open.html`, and `/Applications` symlink.
+  - [ ] macOS Gatekeeper non-technical 1-click bypass documented via embedded `x-apple.systempreferences:com.apple.preference.security` button in `How to Open.html`.
+  - [ ] Styled installer DMG (`create_dmg.sh`) with Applications symlink and `How to Open.html` included.
+  - [ ] Ad-hoc codesigning with `xattr -cr` applied to strip quarantine flags from local builds.
 - [ ] **Entitlements Audit**: Restricted solely to network client/server, Downloads directory access, and CoreMediaIO extension.
 
 ---

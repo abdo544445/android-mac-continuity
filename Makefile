@@ -1,8 +1,8 @@
-.PHONY: all build-macos build-android install-android test-macos test-android test-e2e run-companion open-mac reveal run-cli run-relay release clean help
+.PHONY: all build-macos build-dmg build-zip build-android install-android test-macos test-android test-e2e run-companion open-mac reveal run-cli run-relay release clean help
 
 VERSION ?= $(shell cat VERSION 2>/dev/null | tr -d '[:space:]')
 
-all: build-macos build-android test-macos test-android test-e2e
+all: build-macos build-dmg build-zip build-android test-macos test-android test-e2e
 
 build-macos:
 	@echo "🔨 Building macOS Companion .app bundle and CLI..."
@@ -11,6 +11,10 @@ build-macos:
 build-dmg:
 	@echo "📦 Building macOS GUI Installer (.dmg)..."
 	./scripts/create_dmg.sh
+
+build-zip:
+	@echo "📦 Building Gatekeeper-Friendly macOS ZIP Package..."
+	./scripts/create_zip.sh
 
 build-android:
 	@echo "🤖 Building Android Release APK..."
@@ -73,6 +77,8 @@ help:
 	@echo "Targets:"
 	@echo "  make all           - Build macOS .app, Android APK & run all test suites"
 	@echo "  make build-macos   - Build macOS ContinuityCompanion.app bundle"
+	@echo "  make build-dmg     - Build macOS GUI installer (.dmg)"
+	@echo "  make build-zip     - Build Gatekeeper-friendly macOS ZIP package"
 	@echo "  make build-android - Build Android APK"
 	@echo "  make open-mac      - Launch ContinuityCompanion.app in macOS GUI"
 	@echo "  make reveal        - Open dist/ directory in Finder"

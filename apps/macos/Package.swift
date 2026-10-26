@@ -36,6 +36,11 @@ let package = Package(
             name: "ContinuityCLI",
             dependencies: ["ContinuityProtocol"],
             path: "Sources/ContinuityCLI"
+        ),
+        .testTarget(
+            name: "ContinuityTests",
+            dependencies: ["ContinuityProtocol"],
+            path: "Tests/ContinuityTests"
         )
     ]
 )

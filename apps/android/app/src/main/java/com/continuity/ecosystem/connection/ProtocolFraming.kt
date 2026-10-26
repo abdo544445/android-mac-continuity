@@ -43,7 +43,43 @@ sealed class DecodedFrame {
 
 object ProtocolFraming {
     private val MAGIC = byteArrayOf(0x43.toByte(), 0x4E.toByte(), 0x54.toByte(), 0x31.toByte()) // "CNT1"
-    private val gson = Gson()
+    val gson: Gson = com.google.gson.GsonBuilder()
+        .registerTypeAdapter(com.continuity.ecosystem.core.DevicePlatform::class.java, com.google.gson.JsonDeserializer { json, _, _ ->
+            when {
+                json.isJsonPrimitive && json.asJsonPrimitive.isNumber -> {
+                    when (json.asInt) {
+                        1 -> com.continuity.ecosystem.core.DevicePlatform.PLATFORM_MACOS
+                        2 -> com.continuity.ecosystem.core.DevicePlatform.PLATFORM_ANDROID
+                        else -> com.continuity.ecosystem.core.DevicePlatform.PLATFORM_UNSPECIFIED
+                    }
+                }
+                json.isJsonPrimitive && json.asJsonPrimitive.isString -> {
+                    val s = json.asString.uppercase()
+                    when {
+                        s.contains("MACOS") -> com.continuity.ecosystem.core.DevicePlatform.PLATFORM_MACOS
+                        s.contains("ANDROID") -> com.continuity.ecosystem.core.DevicePlatform.PLATFORM_ANDROID
+                        else -> com.continuity.ecosystem.core.DevicePlatform.PLATFORM_UNSPECIFIED
+                    }
+                }
+                else -> com.continuity.ecosystem.core.DevicePlatform.PLATFORM_UNSPECIFIED
+            }
+        })
+        .registerTypeAdapter(com.continuity.ecosystem.core.DeviceEdition::class.java, com.google.gson.JsonDeserializer { json, _, _ ->
+            when {
+                json.isJsonPrimitive && json.asJsonPrimitive.isNumber -> {
+                    when (json.asInt) {
+                        1 -> com.continuity.ecosystem.core.DeviceEdition.EDITION_ADVANCED
+                        else -> com.continuity.ecosystem.core.DeviceEdition.EDITION_PUBLIC
+                    }
+                }
+                json.isJsonPrimitive && json.asJsonPrimitive.isString -> {
+                    val s = json.asString.uppercase()
+                    if (s.contains("ADVANCED")) com.continuity.ecosystem.core.DeviceEdition.EDITION_ADVANCED else com.continuity.ecosystem.core.DeviceEdition.EDITION_PUBLIC
+                }
+                else -> com.continuity.ecosystem.core.DeviceEdition.EDITION_PUBLIC
+            }
+        })
+        .create()
 
     fun writeEnvelope(output: OutputStream, envelope: ContinuityEnvelope) {
         val jsonBytes = gson.toJson(envelope).toByteArray(Charsets.UTF_8)

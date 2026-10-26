@@ -4,7 +4,7 @@ set -e
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="ContinuityCompanion"
 APP_VERSION="$(cat "$WORKSPACE_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
-APP_VERSION="${APP_VERSION:-1.0.1}"
+APP_VERSION="${APP_VERSION:-1.0.4}"
 DIST_DIR="$WORKSPACE_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_BUNDLE/Contents"
@@ -96,7 +96,8 @@ if [ -f "$CLI_PATH" ]; then
     chmod +x "$DIST_DIR/ContinuityCLI"
 fi
 
-# Ad-hoc codesign the bundle for macOS Gatekeeper compatibility
+# Strip quarantine and extended attributes, then ad-hoc codesign the bundle
+xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 codesign --force --deep --sign - "$APP_BUNDLE"
 
 echo "✅ Successfully created: $APP_BUNDLE"

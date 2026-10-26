@@ -17,12 +17,16 @@ The ecosystem is engineered around a **local-first, zero-knowledge security arch
 
 | Platform | Download Link | Description |
 | :--- | :--- | :--- |
-| **macOS** (Apple Silicon & Intel) | [**ContinuityCompanion-macOS-v1.0.4.dmg**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.4/ContinuityCompanion-macOS-v1.0.4.dmg) | Native GUI drag-and-drop installer for macOS Sonoma & Sequoia |
+| **macOS (Recommended)** | [**ContinuityCompanion-macOS-v1.0.4.zip**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.4/ContinuityCompanion-macOS-v1.0.4.zip) | Gatekeeper-friendly ZIP with 1-click `How to Open.html` helper |
+| **macOS GUI DMG** | [**ContinuityCompanion-macOS-v1.0.4.dmg**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.4/ContinuityCompanion-macOS-v1.0.4.dmg) | Drag-and-drop installer for macOS Sonoma & Sequoia |
 | **Android** (Universal APK) | [**Continuity-Android-v1.0.4.apk**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.4/Continuity-Android-v1.0.4.apk) | Release-signed APK (Play Protect bypass, API 26+) |
-| **macOS Portable Archive** | [**ContinuityCompanion-macOS-v1.0.4.zip**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.4/ContinuityCompanion-macOS-v1.0.4.zip) | Standalone `.app` bundle |
 
 > [!TIP]
-> **First-time macOS Opening**: If Gatekeeper shows an unsigned notice on macOS Sonoma / Sequoia, simply right-click `ContinuityCompanion.app` and choose **Open**, or go to **System Settings → Privacy & Security** and click **Open Anyway**.
+> **Zero-Terminal macOS Launch for Non-Technical Users**:
+> Download **`ContinuityCompanion-macOS-v1.0.4.zip`** and double-click to unpack.
+> 1. Drag `ContinuityCompanion.app` into `/Applications` and launch it.
+> 2. When macOS displays the *"Not Opened"* dialog, click **Done** (do NOT click *Move to Trash*).
+> 3. Double-click the included **`How to Open.html`** guide and click **Open Privacy & Security Settings**, then click **Open Anyway** at the bottom. No Terminal commands or source builds needed!
 
 ---
 
