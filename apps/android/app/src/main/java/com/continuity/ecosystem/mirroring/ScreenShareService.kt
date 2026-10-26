@@ -56,8 +56,8 @@ class ScreenShareService : Service() {
                 val metrics = resources.displayMetrics
                 val screenW = metrics.widthPixels
                 val screenH = metrics.heightPixels
-                // Scale to 960 max dimension for ultra-low latency (< 25ms encode time)
-                val maxDim = 960f
+                // Scale to 720 max dimension for ultra-low latency (< 15ms encode time)
+                val maxDim = 720f
                 val scale = minOf(1.0f, maxDim / maxOf(screenW, screenH))
                 val targetW = ((screenW * scale).toInt() / 2) * 2
                 val targetH = ((screenH * scale).toInt() / 2) * 2
@@ -134,7 +134,7 @@ class ScreenShareService : Service() {
                     }
 
                     val out = ByteArrayOutputStream(32768)
-                    croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 52, out)
+                    croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 38, out)
                     if (croppedBitmap !== rawBitmap) {
                         croppedBitmap.recycle()
                     }

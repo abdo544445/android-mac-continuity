@@ -9,6 +9,11 @@ public struct MirroringView: View {
     @ObservedObject var clipboardBridge = ClipboardBridge.shared
     @ObservedObject var mirrorManager = MirroringManager.shared
     @State private var isDropTargeted = false
+    @State private var showAdbSetupSheet = false
+    @State private var adbPhoneIp = "192.168.1.28"
+    @State private var adbPairPort = ""
+    @State private var adbPairCode = ""
+    @State private var adbConnectPort = ""
 
     public init() {}
 
@@ -86,6 +91,55 @@ public struct MirroringView: View {
             }
             .padding()
             .background(Color(NSColor.windowBackgroundColor))
+
+            Divider()
+
+            // ADB Connectivity HUD Banner
+            if advancedHost.connectedAdbDevices.isEmpty {
+                HStack(spacing: 12) {
+                    Image(systemName: "bolt.horizontal.circle")
+                        .foregroundColor(.orange)
+                        .font(.title3)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("60 FPS Ultra-Fast Mirror: Device Not Connected via ADB")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Text(advancedHost.statusMessage.isEmpty ? "Plug in via USB or pair using phone's Wireless Debugging" : advancedHost.statusMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button("Wireless ADB Setup") {
+                        if let ip = LanDiscoveryService.shared.discoveredPeers.first?.ip, !ip.isEmpty {
+                            adbPhoneIp = ip
+                        }
+                        showAdbSetupSheet = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.12))
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text("60 FPS Ultra-Fast Mirror Ready (\(advancedHost.connectedAdbDevices.joined(separator: ", ")))")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.green)
+                    Spacer()
+                    Button("Lock Port 5555 (via USB)") {
+                        advancedHost.lockToPermanentPort5555()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .help("Lock phone to port 5555 so you can unplug USB and keep wireless mirror permanently")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color.green.opacity(0.1))
+            }
 
             Divider()
 
@@ -185,6 +239,128 @@ public struct MirroringView: View {
             .frame(maxWidth: .infinity)
             .background(Color(NSColor.windowBackgroundColor))
         }
+        .sheet(isPresented: $showAdbSetupSheet) {
+            adbSetupSheetView()
+        }
+    }
+
+    private func adbSetupSheetView() -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Text("⚡ Wireless ADB & 60 FPS Setup")
+                    .font(.headline)
+                Spacer()
+                Button("Done") {
+                    showAdbSetupSheet = false
+                }
+            }
+
+            Divider()
+
+            // Instructions
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Pair Wirelessly (Android 11+)")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Text("1. On your phone, go to Settings > Developer options > Wireless debugging.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("2. Turn Wireless debugging ON and tap 'Pair device with pairing code'.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("3. Enter the IP, 5-digit Port, and 6-digit Code shown on the phone:")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            // Input Fields
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                GridRow {
+                    Text("Phone IP:").font(.caption)
+                    TextField("192.168.1.X", text: $adbPhoneIp)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                }
+                GridRow {
+                    Text("Pairing Port:").font(.caption)
+                    TextField("Port (e.g. 38475)", text: $adbPairPort)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                }
+                GridRow {
+                    Text("6-digit Code:").font(.caption)
+                    TextField("Code (e.g. 123456)", text: $adbPairCode)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                }
+                GridRow {
+                    Text("Connect Port:").font(.caption)
+                    TextField("Optional (if different)", text: $adbConnectPort)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                }
+            }
+
+            HStack {
+                Button(action: {
+                    advancedHost.pairWirelessAdb(
+                        ip: adbPhoneIp,
+                        pairPort: adbPairPort,
+                        code: adbPairCode,
+                        connectPort: adbConnectPort
+                    )
+                }) {
+                    Label("Pair & Connect", systemImage: "link")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(adbPhoneIp.isEmpty || adbPairPort.isEmpty || adbPairCode.isEmpty)
+
+                Button(action: {
+                    let port = adbConnectPort.isEmpty ? adbPairPort : adbConnectPort
+                    advancedHost.connectWirelessAdb(ip: adbPhoneIp, port: port)
+                }) {
+                    Text("Direct Connect (Already Paired)")
+                }
+                .buttonStyle(.bordered)
+                .disabled(adbPhoneIp.isEmpty || (adbConnectPort.isEmpty && adbPairPort.isEmpty))
+            }
+
+            Divider()
+
+            // Permanent Port 5555 Section
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Lock Permanent Wireless Mode (Recommended)")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Text("Connect phone via USB once, then click below. You can then unplug the cable and wireless 60fps mirror will stay permanently active on port 5555!")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                HStack {
+                    Button(action: {
+                        advancedHost.lockToPermanentPort5555()
+                    }) {
+                        Label("Lock to Port 5555 via USB", systemImage: "cable.connector")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Toggle("Auto-Reconnect Keep-Alive", isOn: $advancedHost.isKeepAliveEnabled)
+                        .toggleStyle(.checkbox)
+                        .font(.caption)
+                }
+            }
+
+            if !advancedHost.statusMessage.isEmpty {
+                Text(advancedHost.statusMessage)
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                    .padding(6)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(6)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
