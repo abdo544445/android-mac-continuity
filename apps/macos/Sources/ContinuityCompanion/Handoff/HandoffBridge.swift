@@ -70,8 +70,9 @@ public final class HandoffBridge: ObservableObject {
                 var env = ContinuityEnvelope(senderDeviceId: "macos-companion")
                 env.handoffActivity = activity
                 activeSession.send(envelope: env)
+                let finalUrl = targetUrl
                 await MainActor.run {
-                    ConnectionAgent.shared.debugLog("Pushed Mac browser tab to Android: \(targetUrl)")
+                    ConnectionAgent.shared.debugLog("Pushed Mac browser tab to Android: \(finalUrl)")
                 }
             }
         }

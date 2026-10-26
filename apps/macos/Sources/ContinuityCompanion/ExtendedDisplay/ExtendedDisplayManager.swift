@@ -50,7 +50,7 @@ public final class ExtendedDisplayManager: ObservableObject {
 
         let interval = 1.0 / Double(fps)
         captureTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.captureAndSendFrame(session: activeSession)
             }
         }
