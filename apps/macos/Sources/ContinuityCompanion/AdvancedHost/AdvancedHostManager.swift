@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import CoreImage
 
 @MainActor
 public final class AdvancedHostManager: ObservableObject {
@@ -17,6 +19,14 @@ public final class AdvancedHostManager: ObservableObject {
     @Published public var isKeepAliveEnabled: Bool = true
     @Published public var isAudioForwardingEnabled: Bool = true
     private var keepAliveTimer: Timer?
+
+    // MARK: - Wireless ADB QR Code Pairing
+    @Published public var qrImage: NSImage? = nil
+    @Published public var qrServiceName: String = ""
+    @Published public var qrPairingCode: String = ""
+    @Published public var isQrPairingActive: Bool = false
+    @Published public var qrStatusMessage: String = ""
+    private var qrPollingTask: Task<Void, Never>? = nil
 
     private var scrcpyProcess: Process?
 
@@ -189,6 +199,167 @@ public final class AdvancedHostManager: ObservableObject {
                 self.refreshDevices()
             }
         }
+    }
+
+    // MARK: - QR Code Pairing Operations
+    public func startQrPairing() {
+        stopQrPairing()
+        generateNewQrPairing()
+    }
+
+    public func generateNewQrPairing() {
+        let randomSuffix = String(format: "%04x", Int.random(in: 0...0xFFFF))
+        qrServiceName = "Continuity-\(randomSuffix)"
+        qrPairingCode = String(format: "%06d", Int.random(in: 100000...999999))
+        let payload = "WIFI:T:ADB;S:\(qrServiceName);P:\(qrPairingCode);;"
+
+        qrImage = Self.generateQRCode(from: payload)
+        isQrPairingActive = true
+        qrStatusMessage = "Ready. Point your phone's 'Pair device with QR code' scanner at this code..."
+
+        startQrPollingLoop()
+    }
+
+    public func stopQrPairing() {
+        qrPollingTask?.cancel()
+        qrPollingTask = nil
+        isQrPairingActive = false
+    }
+
+    private func onQrPhoneDetected(target: String) {
+        qrStatusMessage = "Phone detected on Wi-Fi (\(target))! Pairing..."
+    }
+
+    private func onQrPairingSuccess() {
+        qrStatusMessage = "✅ Successfully paired with device! Mirror ready."
+        statusMessage = "Paired with device via QR code!"
+        refreshDevices()
+        isQrPairingActive = false
+    }
+
+    private func onQrConnected(target: String) {
+        qrStatusMessage = "✅ Connected to device (\(target))!"
+        refreshDevices()
+        isQrPairingActive = false
+    }
+
+    private func startQrPollingLoop() {
+        qrPollingTask?.cancel()
+        let path = adbPath
+        let env = buildProcessEnvironment()
+        let expectedCode = qrPairingCode
+
+        qrPollingTask = Task { [weak self] in
+            for _ in 0..<120 {
+                if Task.isCancelled { break }
+
+                let (pairingEndpoint, connectEndpoint) = await Task.detached {
+                    let proc = Process()
+                    proc.executableURL = URL(fileURLWithPath: path)
+                    proc.environment = env
+                    proc.arguments = ["mdns", "services"]
+
+                    let pipe = Pipe()
+                    proc.standardOutput = pipe
+                    try? proc.run()
+                    proc.waitUntilExit()
+
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8) ?? ""
+
+                    var pEndpoint: String? = nil
+                    var cEndpoint: String? = nil
+
+                    for line in output.components(separatedBy: .newlines) {
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if trimmed.isEmpty || trimmed.hasPrefix("List of") { continue }
+                        let tokens = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+                        if let endpoint = tokens.first(where: { $0.contains(":") && ($0.contains(".") || $0.contains("[")) }) {
+                            if trimmed.contains("_adb-tls-pairing") {
+                                pEndpoint = endpoint
+                            } else if trimmed.contains("_adb-tls-connect") {
+                                cEndpoint = endpoint
+                            }
+                        }
+                    }
+                    return (pEndpoint, cEndpoint)
+                }.value
+
+                guard let self = self else { break }
+
+                if let pairTarget = pairingEndpoint {
+                    self.onQrPhoneDetected(target: pairTarget)
+
+                    let pairSuccess = await Task.detached {
+                        let pairProc = Process()
+                        pairProc.executableURL = URL(fileURLWithPath: path)
+                        pairProc.environment = env
+                        pairProc.arguments = ["pair", pairTarget, expectedCode]
+
+                        let pairPipe = Pipe()
+                        pairProc.standardOutput = pairPipe
+                        try? pairProc.run()
+                        pairProc.waitUntilExit()
+
+                        let pairData = pairPipe.fileHandleForReading.readDataToEndOfFile()
+                        let pairOutput = String(data: pairData, encoding: .utf8) ?? ""
+                        return pairOutput.contains("Successfully paired") || pairProc.terminationStatus == 0
+                    }.value
+
+                    if pairSuccess {
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+                        if let conn = connectEndpoint {
+                            await Task.detached {
+                                let connProc = Process()
+                                connProc.executableURL = URL(fileURLWithPath: path)
+                                connProc.environment = env
+                                connProc.arguments = ["connect", conn]
+                                try? connProc.run()
+                                connProc.waitUntilExit()
+                            }.value
+                        } else {
+                            let ip = pairTarget.split(separator: ":").first.map(String.init) ?? ""
+                            if !ip.isEmpty {
+                                await self.connectWirelessAdbIfNeeded(peerIp: ip)
+                            }
+                        }
+
+                        self.onQrPairingSuccess()
+                        break
+                    }
+                } else if let connTarget = connectEndpoint {
+                    await Task.detached {
+                        let connProc = Process()
+                        connProc.executableURL = URL(fileURLWithPath: path)
+                        connProc.environment = env
+                        connProc.arguments = ["connect", connTarget]
+                        try? connProc.run()
+                        connProc.waitUntilExit()
+                    }.value
+
+                    self.onQrConnected(target: connTarget)
+                    break
+                }
+
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
+        }
+    }
+
+    public static func generateQRCode(from string: String) -> NSImage? {
+        let filter = CIFilter(name: "CIQRCodeGenerator")
+        filter?.setValue(string.data(using: .utf8), forKey: "inputMessage")
+        filter?.setValue("M", forKey: "inputCorrectionLevel")
+        guard let ciImage = filter?.outputImage else { return nil }
+
+        let transform = CGAffineTransform(scaleX: 10, y: 10)
+        let scaledCIImage = ciImage.transformed(by: transform)
+
+        let rep = NSCIImageRep(ciImage: scaledCIImage)
+        let nsImage = NSImage(size: rep.size)
+        nsImage.addRepresentation(rep)
+        return nsImage
     }
 
     public func pairWirelessAdb(ip: String, pairPort: String, code: String, connectPort: String) {

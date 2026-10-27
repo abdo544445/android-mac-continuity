@@ -14,6 +14,7 @@ public struct MirroringView: View {
     @State private var adbPairPort = ""
     @State private var adbPairCode = ""
     @State private var adbConnectPort = ""
+    @State private var setupTab: String = "qr"
 
     public init() {}
 
@@ -275,7 +276,7 @@ public struct MirroringView: View {
     }
 
     private func adbSetupSheetView() -> some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("⚡ Wireless ADB & 60 FPS Setup")
                     .font(.headline)
@@ -285,25 +286,151 @@ public struct MirroringView: View {
                 }
             }
 
+            Picker("Setup Method", selection: $setupTab) {
+                Label("Scan QR Code", systemImage: "qrcode").tag("qr")
+                Label("Manual PIN / Port", systemImage: "keyboard").tag("manual")
+                Label("Lock Port 5555 (USB)", systemImage: "cable.connector").tag("usb")
+            }
+            .pickerStyle(.segmented)
+
             Divider()
 
-            // Instructions
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Pair Wirelessly (Android 11+)")
+            if setupTab == "qr" {
+                qrSetupView()
+            } else if setupTab == "manual" {
+                manualSetupView()
+            } else {
+                permanentUsbView()
+            }
+
+            if !advancedHost.statusMessage.isEmpty {
+                Text(advancedHost.statusMessage)
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                    .padding(6)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(6)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
+        .onAppear {
+            if advancedHost.isAdbAvailable {
+                advancedHost.startQrPairing()
+            }
+        }
+        .onDisappear {
+            advancedHost.stopQrPairing()
+        }
+    }
+
+    private func qrSetupView() -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 20) {
+                // QR Code
+                VStack(spacing: 8) {
+                    if let qr = advancedHost.qrImage {
+                        Image(nsImage: qr)
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 190, height: 190)
+                            .padding(10)
+                            .background(Color.white)
+                            .cornerRadius(12)
+                            .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
+                    } else {
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.1))
+                            .frame(width: 190, height: 190)
+                            .cornerRadius(12)
+                            .overlay(ProgressView())
+                    }
+
+                    Button(action: {
+                        advancedHost.generateNewQrPairing()
+                    }) {
+                        Label("Regenerate Code", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                }
+
+                // Instructions
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Pair in 3 Seconds (Android 11+)")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("1.").fontWeight(.bold).foregroundColor(.blue)
+                            Text("On phone: Settings > Developer options > Wireless debugging")
+                                .font(.caption)
+                        }
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("2.").fontWeight(.bold).foregroundColor(.blue)
+                            Text("Turn Wireless debugging ON")
+                                .font(.caption)
+                        }
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("3.").fontWeight(.bold).foregroundColor(.blue)
+                            Text("Tap 'Pair device with QR code' and scan the code on the left!")
+                                .font(.caption)
+                        }
+                    }
+                    .foregroundColor(.secondary)
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Service:").font(.caption2).foregroundColor(.secondary)
+                            Text(advancedHost.qrServiceName).font(.system(.caption2, design: .monospaced))
+                        }
+                        HStack {
+                            Text("Pair Code:").font(.caption2).foregroundColor(.secondary)
+                            Text(advancedHost.qrPairingCode).font(.system(.caption2, design: .monospaced)).foregroundColor(.blue)
+                        }
+                    }
+                }
+            }
+
+            // Status message / Live progress
+            HStack(spacing: 8) {
+                if !advancedHost.connectedAdbDevices.isEmpty {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text("Device Connected (\(advancedHost.connectedAdbDevices.first ?? ""))! 60 FPS Mirror is ready.")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.green)
+                } else if advancedHost.isQrPairingActive {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(advancedHost.qrStatusMessage.isEmpty ? "Ready. Point phone camera at QR code..." : advancedHost.qrStatusMessage)
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.blue.opacity(0.08))
+            .cornerRadius(8)
+        }
+    }
+
+    private func manualSetupView() -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Manual Numeric Pairing")
                     .font(.subheadline)
                     .fontWeight(.semibold)
-                Text("1. On your phone, go to Settings > Developer options > Wireless debugging.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("2. Turn Wireless debugging ON and tap 'Pair device with pairing code'.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("3. Enter the IP, 5-digit Port, and 6-digit Code shown on the phone:")
+                Text("On phone: Settings > Developer options > Wireless debugging > 'Pair device with pairing code'")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
-            // Input Fields
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
                 GridRow {
                     Text("Phone IP:").font(.caption)
@@ -354,43 +481,31 @@ public struct MirroringView: View {
                 .buttonStyle(.bordered)
                 .disabled(adbPhoneIp.isEmpty || (adbConnectPort.isEmpty && adbPairPort.isEmpty))
             }
+        }
+    }
 
-            Divider()
+    private func permanentUsbView() -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Lock Permanent Wireless Mode (Recommended)")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            Text("Connect phone via USB once, then click below. You can then unplug the cable and wireless 60fps mirror will stay permanently active on port 5555!")
+                .font(.caption)
+                .foregroundColor(.secondary)
 
-            // Permanent Port 5555 Section
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Lock Permanent Wireless Mode (Recommended)")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                Text("Connect phone via USB once, then click below. You can then unplug the cable and wireless 60fps mirror will stay permanently active on port 5555!")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                HStack {
-                    Button(action: {
-                        advancedHost.lockToPermanentPort5555()
-                    }) {
-                        Label("Lock to Port 5555 via USB", systemImage: "cable.connector")
-                    }
-                    .buttonStyle(.bordered)
-
-                    Toggle("Auto-Reconnect Keep-Alive", isOn: $advancedHost.isKeepAliveEnabled)
-                        .toggleStyle(.checkbox)
-                        .font(.caption)
+            HStack {
+                Button(action: {
+                    advancedHost.lockToPermanentPort5555()
+                }) {
+                    Label("Lock to Port 5555 via USB", systemImage: "cable.connector")
                 }
-            }
+                .buttonStyle(.bordered)
 
-            if !advancedHost.statusMessage.isEmpty {
-                Text(advancedHost.statusMessage)
+                Toggle("Auto-Reconnect Keep-Alive", isOn: $advancedHost.isKeepAliveEnabled)
+                    .toggleStyle(.checkbox)
                     .font(.caption)
-                    .foregroundColor(.blue)
-                    .padding(6)
-                    .background(Color.blue.opacity(0.1))
-                    .cornerRadius(6)
             }
         }
-        .padding(24)
-        .frame(width: 480)
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
