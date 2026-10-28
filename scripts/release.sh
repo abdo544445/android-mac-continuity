@@ -52,7 +52,7 @@ echo "  - $MAC_ZIP"
 
 # Git Commit & Tag
 git add .
-git commit -m "chore(release): bump version to v$REL_VERSION with low-latency mirroring, release APK signing, and navigation fixes" || true
+git commit -m "chore(release): bump version to v$REL_VERSION: $REL_NOTES" || true
 git tag -fa "v$REL_VERSION" -m "Release v$REL_VERSION"
 git push origin main --tags || true
 

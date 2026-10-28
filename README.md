@@ -1,7 +1,7 @@
 # Android + macOS Continuity Ecosystem
 
-[![Release Version](https://img.shields.io/badge/Release-v1.0.4-brightgreen.svg)](https://github.com/abdo544445/android-mac-continuity/releases/tag/v1.0.4)
-[![Protocol Version](https://img.shields.io/badge/Protocol-v1.0.4-blue.svg)](shared/protocol/schemas/continuity_protocol.proto)
+[![Release Version](https://img.shields.io/badge/Release-v1.0.7-brightgreen.svg)](https://github.com/abdo544445/android-mac-continuity/releases/tag/v1.0.7)
+[![Protocol Version](https://img.shields.io/badge/Protocol-v1.0.7-blue.svg)](shared/protocol/schemas/continuity_protocol.proto)
 [![macOS Compatibility](https://img.shields.io/badge/macOS-14.0%2B%20(Sonoma%2FSequoia)-black.svg?logo=apple)](apps/macos)
 [![Android Compatibility](https://img.shields.io/badge/Android-12%2B%20(API%2031%2B)-green.svg?logo=android)](apps/android)
 [![Security](https://img.shields.io/badge/Encryption-AES--256--GCM%20%7C%20ECDH%20P--256-orange.svg)](shared/crypto-spec/spec.md)
@@ -13,20 +13,44 @@ The ecosystem is engineered around a **local-first, zero-knowledge security arch
 
 ---
 
-## ⚡ Quick Download & Install (Latest: v1.0.4)
+## ⚡ Quick Download & Install (Latest: v1.0.7)
 
 | Platform | Download Link | Description |
 | :--- | :--- | :--- |
-| **macOS (Recommended)** | [**ContinuityCompanion-macOS-v1.0.4.zip**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.4/ContinuityCompanion-macOS-v1.0.4.zip) | Gatekeeper-friendly ZIP with 1-click `How to Open.html` helper |
-| **macOS GUI DMG** | [**ContinuityCompanion-macOS-v1.0.4.dmg**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.4/ContinuityCompanion-macOS-v1.0.4.dmg) | Drag-and-drop installer for macOS Sonoma & Sequoia |
-| **Android** (Universal APK) | [**Continuity-Android-v1.0.4.apk**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.4/Continuity-Android-v1.0.4.apk) | Release-signed APK (Play Protect bypass, API 26+) |
+| **macOS (Recommended)** | [**ContinuityCompanion-macOS-v1.0.7.zip**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.7/ContinuityCompanion-macOS-v1.0.7.zip) | Gatekeeper-friendly ZIP with 1-click `How to Open.html` helper |
+| **macOS GUI DMG** | [**ContinuityCompanion-macOS-v1.0.7.dmg**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.7/ContinuityCompanion-macOS-v1.0.7.dmg) | Drag-and-drop installer for macOS Sonoma & Sequoia |
+| **Android** (Universal APK) | [**Continuity-Android-v1.0.7.apk**](https://github.com/abdo544445/android-mac-continuity/releases/download/v1.0.7/Continuity-Android-v1.0.7.apk) | Release-signed APK (Play Protect bypass, API 26+) |
 
 > [!TIP]
 > **Zero-Terminal macOS Launch for Non-Technical Users**:
-> Download **`ContinuityCompanion-macOS-v1.0.4.zip`** and double-click to unpack.
+> Download **`ContinuityCompanion-macOS-v1.0.7.zip`** and double-click to unpack.
 > 1. Drag `ContinuityCompanion.app` into `/Applications` and launch it.
 > 2. When macOS displays the *"Not Opened"* dialog, click **Done** (do NOT click *Move to Trash*).
 > 3. Double-click the included **`How to Open.html`** guide and click **Open Privacy & Security Settings**, then click **Open Anyway** at the bottom. No Terminal commands or source builds needed!
+
+---
+
+## 📸 Visual Showcase
+
+| **macOS Companion Dashboard & HUD** | **Sub-35ms Hardware Screen Mirroring** |
+| :---: | :---: |
+| <img src="docs/screenshots/dashboard.png" width="480" alt="macOS Companion Dashboard" /> | <img src="docs/screenshots/screen-mirroring.png" width="480" alt="Hardware Screen Mirroring" /> |
+| *Unified device status, active connections, and instant feature shortcuts* | *Hardware-accelerated mirroring, remote touch, audio forwarding & window resize* |
+
+| **Wireless ADB Pairing (QR Code Scanner)** | **Wireless ADB Manual PIN & Keep-Alive** |
+| :---: | :---: |
+| <img src="docs/screenshots/wireless-adb-qr.png" width="480" alt="Wireless ADB QR Code Pairing" /> | <img src="docs/screenshots/wireless-adb-manual.png" width="480" alt="Wireless ADB Manual PIN Pairing" /> |
+| *1-Tap QR pairing via Android Wireless Debugging scanner* | *Manual IP:Port pairing with automated keep-alive and reconnection* |
+
+| **AirDrop-Speed File Transfers** | **Tablet Extended Secondary Display** |
+| :---: | :---: |
+| <img src="docs/screenshots/file-transfers.png" width="480" alt="AirDrop-Speed File Transfers" /> | <img src="docs/screenshots/extended-display.png" width="480" alt="Tablet Extended Secondary Display" /> |
+| *Bidirectional chunked transfers with Scoped Storage and Finder drag & drop* | *Virtual macOS secondary display streaming directly to Android tablet/phone* |
+
+| **Granular Settings, Permissions & Diagnostics** |
+| :---: |
+| <img src="docs/screenshots/settings.png" width="600" alt="Settings & System Diagnostics" /> |
+| *Runtime permission detection, Android All Files Access banners, dependency verification, and system diagnostics* |
 
 ---
 
@@ -54,7 +78,7 @@ The ecosystem is engineered around a **local-first, zero-knowledge security arch
 4. [GUI DMG Installer & In-App Dependency Manager](#-gui-dmg-installer--in-app-dependency-manager)
 5. [Repository Structure](#-repository-structure)
 6. [Building & Running from Source](#-building--running-from-source)
-7. [Stability & Engineering Highlights in v1.0.4](#-stability--engineering-highlights-in-v104)
+7. [Stability & Engineering Highlights in v1.0.7](#-stability--engineering-highlights-in-v107)
 8. [Security & Cryptographic Specification](#-security--cryptographic-specification)
 9. [Platform Constraints & Compliance](#-platform-constraints--compliance)
 10. [Troubleshooting & FAQ](#-troubleshooting--faq)
@@ -237,8 +261,10 @@ sequenceDiagram
 
 ### 3. Remote Storage Explorer
 - **Remote Finder for Android**: Browse, search, and navigate your tablet/phone's internal storage (`/storage/emulated/0`) directly from the macOS Companion app.
-- **Direct Downloads**: Download any file or photo from your phone with a single click.
-- **Scoped Storage Intelligent Fallback**: Automatically provides access to standard user folders (`Downloads`, `Documents`, `DCIM`, `Pictures`, `Music`) on modern Android 11–16 devices.
+- **Dual-Pipeline Architecture**: Seamlessly loads phone directory contents via the high-speed Continuity socket or automated Wireless ADB (`adb shell ls -la`) fallback when connected wirelessly or over USB.
+- **Direct Downloads**: Download any file or photo from your phone with a single click. Files are saved directly to `~/Downloads/Continuity/` and instantly revealed in macOS Finder.
+- **Directory Upload & Drag-and-Drop**: Upload files straight into the currently viewed remote directory with automatic Android Media Scanner broadcast indexing (`ACTION_MEDIA_SCANNER_SCAN_FILE`).
+- **All Files Access & Scoped Storage Manager**: Full support for Android 11–16 Scoped Storage policies with proactive "All Files Access" (`MANAGE_EXTERNAL_STORAGE`) grant banners in the Android app.
 
 ### 4. Bidirectional Folder Auto-Sync
 - **Continuous Local Synchronization**: Keeps `~/ContinuitySync` on your Mac in sync with `Documents/ContinuitySync` on your tablet.
@@ -285,7 +311,7 @@ sequenceDiagram
 Starting with **v1.0.4**, Continuity Companion for macOS features a native GUI installer and an in-app dependency manager:
 
 1. **Drag-and-Drop `.dmg`**:
-   - Double-click `ContinuityCompanion-macOS-v1.0.4.dmg`.
+   - Double-click `ContinuityCompanion-macOS-v1.0.7.dmg`.
    - Drag `ContinuityCompanion.app` into `/Applications`.
 2. **In-App 1-Click Dependency Installer**:
    - Open **Settings** in the macOS Companion app.
@@ -299,7 +325,7 @@ Starting with **v1.0.4**, Continuity Companion for macOS features a native GUI i
 ```
 android-mac-continuity/
 ├── Makefile                      # Convenient build, test, package, and release automation
-├── VERSION                       # Semantic version (1.0.4)
+├── VERSION                       # Semantic version (1.0.7)
 ├── README.md                     # Comprehensive architecture and user guide
 ├── .github/
 │   └── workflows/
@@ -416,31 +442,44 @@ make all
 
 ---
 
-## ⚡ Stability & Engineering Highlights in v1.0.4
+## ⚡ Stability & Engineering Highlights in v1.0.7
 
-1. **Dedicated Release Keystore & Play Protect Bypass**:
+1. **Storage Explorer Dual-Pipeline & 1-Click Downloads**:
+   - Engineered dual-pipeline directory loading in `StorageExplorerManager.swift`: uses Continuity socket protocol when paired over Wi-Fi, and automatically falls back to line-rate Wireless ADB (`adb shell ls -la`) when connected wirelessly or over USB.
+   - Added instant file downloads via `adb pull` to `~/Downloads/Continuity/` with auto-reveal in macOS Finder.
+   - Added directory-targeted file uploads with automatic Android Media Scanner broadcast indexing (`ACTION_MEDIA_SCANNER_SCAN_FILE`).
+
+2. **Automated Android Permissions Management**:
+   - Implemented `PermissionsManager.kt` handling Android 11–16 "All Files Access" (`MANAGE_EXTERNAL_STORAGE`), Notification Listener service, Camera, and Phone State permissions.
+   - Added persistent "Action Required" banners on the Android Home Screen and interactive status badges in Settings Screen with 1-tap grant intents.
+
+3. **Wireless ADB QR Code Pairing & Keep-Alive Daemon**:
+   - Integrated native QR Code pairing for Android 11+ Wireless Debugging directly from the macOS Companion app, allowing instant pairing without manual port/PIN typing.
+   - Added background keep-alive ping and auto-reconnect logic to maintain continuous wireless debugging connections across sleep and Wi-Fi handoffs.
+
+4. **Dedicated Release Keystore & Play Protect Bypass**:
    - Packaged and signed Android builds using a dedicated RSA-2048 project keystore (`continuity-release.jks`) embedding standard APK Signature Scheme v2 and v3 signatures.
    - Completely eliminates Google Play Protect and OEM security installer warnings ("App not installed due to security risks").
 
-2. **Ultra-Low Latency Display Mirroring (<25ms)**:
+5. **Ultra-Low Latency Display Mirroring (<25ms)**:
    - Optimized VirtualDisplay frame pipeline in `ScreenShareService.kt` to dynamically scale frames to a 960 max dimension ceiling (3x reduction in CPU memory bandwidth).
    - Tuned JPEG compression quality to 52% and frame throttle to 32ms (~30 FPS), dropping single-frame compression times from 60ms to ~8ms and eliminating Wi-Fi TCP socket buffer congestion.
 
-3. **ADB Multi-Device Resolution & Remote Navigation Controls**:
+6. **ADB Multi-Device Resolution & Remote Navigation Controls**:
    - Resolved the `adb: more than one device/emulator` collision bug caused by dual direct IP:port and mDNS TLS daemon registrations (`_adb-tls-connect._tcp`) during wireless debugging.
    - Introduced dynamic device serial filtering (`resolveActiveDevice()`) targeting the active IP address or USB serial for every ADB touch and key event.
    - Added native in-app socket fallback handlers for `ACTION_NAV_BACK` and `ACTION_NAV_HOME` in `MainActivity.kt`.
 
-4. **Eliminated CameraX 25 FPS Recomposition Loop**:
+7. **Eliminated CameraX 25 FPS Recomposition Loop**:
    - Replaced state tracking with lock-free `AtomicLong` and `AtomicInteger`. Moved camera binding into a controlled `LaunchedEffect(isFrontCamera, hasCameraPermission)` lifecycle hook, ensuring 25–30 FPS HD video streaming without memory churn.
 
-5. **Interactive Screen Mirroring Gesture Mapping**:
+8. **Interactive Screen Mirroring Gesture Mapping**:
    - Added coordinate translation onto the macOS mirroring canvas. Clicking or dragging on the mirrored phone screen executes `adb shell input tap X Y` and `swipe` directly on the Android device.
 
-6. **MediaProjection `requestCode` Crash Fix**:
+9. **MediaProjection `requestCode` Crash Fix**:
    - Fixed AndroidX `FragmentActivity` 16-bit integer restriction (`IllegalArgumentException: Can only use lower 16 bits for requestCode`) when launching `mediaProjectionLauncher` on modern Android versions by migrating to `ComponentActivity` and native `android.hardware.biometrics.BiometricPrompt`.
 
-7. **Scoped Storage Fallbacks**:
+10. **Scoped Storage Fallbacks**:
    - Added `MANAGE_EXTERNAL_STORAGE` declaration and added fallback handling in `StorageExplorerService` to ensure standard user folders (`Downloads`, `Documents`, `DCIM`, `Pictures`) are accessible even on strict Android 16 Scoped Storage policies.
 
 ---

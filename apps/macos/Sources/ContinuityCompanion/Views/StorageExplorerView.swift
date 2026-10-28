@@ -97,6 +97,13 @@ public struct StorageExplorerView: View {
                                     storageManager.navigateTo(path: newPath, session: agent.activeSession)
                                 }
                                 .buttonStyle(.bordered)
+                            } else {
+                                Button(action: {
+                                    storageManager.downloadFile(item: item)
+                                }) {
+                                    Label("Download", systemImage: "arrow.down.circle")
+                                }
+                                .buttonStyle(.bordered)
                             }
                         }
                         .padding(.vertical, 4)
@@ -135,7 +142,7 @@ public struct StorageExplorerView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         if panel.runModal() == .OK, let url = panel.url {
-            FileTransferEngine.shared.queueOutgoingTransfer(fileURL: url, session: agent.activeSession)
+            storageManager.uploadFile(fileURL: url, to: storageManager.currentPath)
         }
     }
 }

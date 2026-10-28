@@ -86,6 +86,39 @@ class MainActivity : ComponentActivity() {
     private var extendedDisplayBitmapState by mutableStateOf<Bitmap?>(null)
     private var isWebcamActiveState by mutableStateOf(false)
 
+    private var hasAllFilesAccessState by mutableStateOf(false)
+    private var hasNotificationListenerState by mutableStateOf(false)
+    private var hasCameraPermissionState by mutableStateOf(false)
+    private var hasNotificationPermissionState by mutableStateOf(false)
+
+    private val runtimePermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        updatePermissionStates()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updatePermissionStates()
+    }
+
+    private fun updatePermissionStates() {
+        hasAllFilesAccessState = PermissionsManager.hasAllFilesAccess()
+        hasNotificationListenerState = PermissionsManager.hasNotificationListenerPermission(this)
+        hasCameraPermissionState = PermissionsManager.hasCameraPermission(this)
+        hasNotificationPermissionState = PermissionsManager.hasNotificationPermission(this)
+    }
+
+    private fun requestAllPermissions() {
+        val needed = PermissionsManager.getRequiredRuntimePermissions().filter {
+            androidx.core.content.ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+
+        if (needed.isNotEmpty()) {
+            runtimePermissionsLauncher.launch(needed)
+        }
+    }
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as ConnectionService.LocalBinder
@@ -180,6 +213,8 @@ class MainActivity : ComponentActivity() {
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
 
         handleIncomingShareIntent(intent)
+        updatePermissionStates()
+        requestAllPermissions()
 
         setContent {
             ContinuityTheme {
@@ -554,7 +589,19 @@ class MainActivity : ComponentActivity() {
                                     Toast.makeText(this@MainActivity, "Folder sync initiated", Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            transfers = transfersListState
+                            transfers = transfersListState,
+                            hasAllFilesAccess = hasAllFilesAccessState,
+                            hasNotificationListener = hasNotificationListenerState,
+                            hasCameraPermission = hasCameraPermissionState,
+                            onRequestAllFilesAccess = {
+                                startActivity(PermissionsManager.createAllFilesAccessIntent(this@MainActivity))
+                            },
+                            onRequestNotificationListener = {
+                                startActivity(PermissionsManager.createNotificationListenerSettingsIntent())
+                            },
+                            onRequestRuntimePermissions = {
+                                requestAllPermissions()
+                            }
                         )
                         1 -> PairingScreen(
                             discoveredPeers = discoveredPeersState,
@@ -604,6 +651,19 @@ class MainActivity : ComponentActivity() {
                                 connectionService?.disconnect()
                                 pairedMacNameState = ""
                                 isConnectedState = false
+                            },
+                            hasAllFilesAccess = hasAllFilesAccessState,
+                            hasNotificationListener = hasNotificationListenerState,
+                            hasCameraPermission = hasCameraPermissionState,
+                            hasNotificationPermission = hasNotificationPermissionState,
+                            onRequestAllFilesAccess = {
+                                startActivity(PermissionsManager.createAllFilesAccessIntent(this@MainActivity))
+                            },
+                            onRequestNotificationListener = {
+                                startActivity(PermissionsManager.createNotificationListenerSettingsIntent())
+                            },
+                            onRequestRuntimePermissions = {
+                                requestAllPermissions()
                             }
                         )
                     }

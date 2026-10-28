@@ -31,7 +31,13 @@ fun HomeScreen(
     onExtendedDisplayClicked: (() -> Unit)? = null,
     onHandoffClicked: (() -> Unit)? = null,
     onFolderSyncClicked: (() -> Unit)? = null,
-    transfers: List<AndroidTransferItem>
+    transfers: List<AndroidTransferItem>,
+    hasAllFilesAccess: Boolean = true,
+    hasNotificationListener: Boolean = true,
+    hasCameraPermission: Boolean = true,
+    onRequestAllFilesAccess: () -> Unit = {},
+    onRequestNotificationListener: () -> Unit = {},
+    onRequestRuntimePermissions: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -70,6 +76,97 @@ fun HomeScreen(
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+            }
+        }
+
+        // Permissions Warning Banner if any critical access is missing
+        if (!hasAllFilesAccess || !hasNotificationListener || !hasCameraPermission) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                text = "Action Required: System Permissions",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+
+                        if (!hasAllFilesAccess) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("All Files Storage Access", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text("Required for Mac Storage Explorer and Folder Auto-Sync.", fontSize = 12.sp, color = Color.DarkGray)
+                                }
+                                Button(
+                                    onClick = onRequestAllFilesAccess,
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Grant")
+                                }
+                            }
+                        }
+
+                        if (!hasNotificationListener) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Notification Access", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text("Mirror phone notifications & 2FA codes to Mac.", fontSize = 12.sp, color = Color.DarkGray)
+                                }
+                                Button(
+                                    onClick = onRequestNotificationListener,
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Enable")
+                                }
+                            }
+                        }
+
+                        if (!hasCameraPermission) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Camera Permission", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text("Required to use phone as Mac HD Webcam.", fontSize = 12.sp, color = Color.DarkGray)
+                                }
+                                Button(
+                                    onClick = onRequestRuntimePermissions,
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Allow")
+                                }
+                            }
+                        }
                     }
                 }
             }
