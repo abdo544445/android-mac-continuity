@@ -199,6 +199,7 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
                         self.shouldNavigateToCamera = true
                     }
                     self.liveCameraFrame = img
+                    CameraStreamManager.shared.updateFrame(img)
                 }
             }
             return

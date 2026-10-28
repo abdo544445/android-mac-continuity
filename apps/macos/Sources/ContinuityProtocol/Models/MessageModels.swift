@@ -629,6 +629,31 @@ public struct StorageListResponse: Codable, Sendable, Equatable {
     }
 }
 
+public struct CameraControlRequest: Codable, Sendable, Equatable {
+    public var lens: String? // "BACK", "FRONT", "ULTRA_WIDE"
+    public var torch: Bool?
+    public var zoomRatio: Float? // 1.0 ... 8.0
+    public var exposureCompensation: Int32? // -4 ... +4
+    public var focusMode: String? // "AUTO", "CONTINUOUS", "MACRO"
+    public var whiteBalance: String? // "AUTO", "DAYLIGHT", "INCANDESCENT", "FLUORESCENT", "CLOUDY"
+
+    public init(
+        lens: String? = nil,
+        torch: Bool? = nil,
+        zoomRatio: Float? = nil,
+        exposureCompensation: Int32? = nil,
+        focusMode: String? = nil,
+        whiteBalance: String? = nil
+    ) {
+        self.lens = lens
+        self.torch = torch
+        self.zoomRatio = zoomRatio
+        self.exposureCompensation = exposureCompensation
+        self.focusMode = focusMode
+        self.whiteBalance = whiteBalance
+    }
+}
+
 // MARK: - Top-Level Envelope
 
 public struct ContinuityEnvelope: Codable, Sendable, Equatable {
@@ -677,6 +702,7 @@ public struct ContinuityEnvelope: Codable, Sendable, Equatable {
     public var telephonyAction: TelephonyAction?
     public var storageListRequest: StorageListRequest?
     public var storageListResponse: StorageListResponse?
+    public var cameraControl: CameraControlRequest?
 
     public init(
         version: UInt32 = 1,

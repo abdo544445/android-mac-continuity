@@ -114,6 +114,11 @@ class PairingManager(private val context: Context, private val identity: DeviceI
         editor.apply()
     }
 
+    fun getPairedMacId(): String? {
+        val prefs = context.getSharedPreferences("paired_macs", Context.MODE_PRIVATE)
+        return prefs.getString("mac_id", null)
+    }
+
     fun getPairedMacName(): String {
         val prefs = context.getSharedPreferences("paired_macs", Context.MODE_PRIVATE)
         return prefs.getString("mac_name", "") ?: ""

@@ -11,20 +11,22 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FlashOff
-import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -36,6 +38,7 @@ import androidx.core.content.ContextCompat
 import com.continuity.ecosystem.camera.CameraStreamingService
 import com.continuity.ecosystem.connection.ConnectionService
 import com.continuity.ecosystem.connection.RawBinaryChunk
+import com.continuity.ecosystem.core.CameraControlRequest
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -44,6 +47,7 @@ import java.util.concurrent.atomic.AtomicLong
 @Composable
 fun ContinuityWebcamScreen(
     macName: String,
+    remoteCameraControl: CameraControlRequest? = null,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -66,12 +70,44 @@ fun ContinuityWebcamScreen(
 
     var isFrontCamera by remember { mutableStateOf(false) }
     var isTorchOn by remember { mutableStateOf(false) }
+    var zoomRatio by remember { mutableStateOf(1.0f) }
+    var exposureCompensation by remember { mutableStateOf(0) }
+    var showGridOverlay by remember { mutableStateOf(false) }
+    var showProControls by remember { mutableStateOf(false) }
+
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
-    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+    var cameraInfo by remember { mutableStateOf<CameraInfo?>(null) }
+    val previewView = remember { PreviewView(context) }
 
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     val lastFrameTimeMs = remember { AtomicLong(0L) }
     val frameCounter = remember { AtomicInteger(0) }
+
+    // Sync remote commands from Mac
+    LaunchedEffect(remoteCameraControl) {
+        val ctrl = remoteCameraControl ?: return@LaunchedEffect
+        ctrl.torch?.let { t ->
+            if (!isFrontCamera) {
+                isTorchOn = t
+                cameraControl?.enableTorch(t)
+            }
+        }
+        ctrl.zoomRatio?.let { z ->
+            zoomRatio = z
+            cameraControl?.setZoomRatio(z)
+        }
+        ctrl.exposureCompensation?.let { ev ->
+            exposureCompensation = ev
+            cameraControl?.setExposureCompensationIndex(ev)
+        }
+        ctrl.lens?.let { lens ->
+            val wantFront = (lens.uppercase() == "FRONT")
+            if (isFrontCamera != wantFront) {
+                isFrontCamera = wantFront
+                isTorchOn = false
+            }
+        }
+    }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -88,10 +124,9 @@ fun ContinuityWebcamScreen(
         }
     }
 
-    // Bind / Rebind Camera when lens changes or permission is granted
-    LaunchedEffect(hasCameraPermission, isFrontCamera, previewViewRef) {
-        val previewView = previewViewRef
-        if (!hasCameraPermission || previewView == null) return@LaunchedEffect
+    // Bind Camera lifecycle
+    LaunchedEffect(hasCameraPermission, isFrontCamera) {
+        if (!hasCameraPermission) return@LaunchedEffect
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
@@ -141,7 +176,8 @@ fun ContinuityWebcamScreen(
                                 )
                             )
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        android.util.Log.w("WebcamScreen", "Frame analysis exception: ${e.message}")
                     } finally {
                         try {
                             imageProxy.close()
@@ -157,6 +193,13 @@ fun ContinuityWebcamScreen(
                     imageAnalysis
                 )
                 cameraControl = cam.cameraControl
+                cameraInfo = cam.cameraInfo
+
+                // Re-apply active state
+                cam.cameraControl.setZoomRatio(zoomRatio)
+                if (!isFrontCamera && isTorchOn) {
+                    cam.cameraControl.enableTorch(true)
+                }
             } catch (e: Exception) {
                 android.util.Log.e("WebcamScreen", "Binding failed: ${e.message}", e)
             }
@@ -170,13 +213,36 @@ fun ContinuityWebcamScreen(
     ) {
         if (hasCameraPermission) {
             AndroidView(
-                factory = { ctx ->
-                    PreviewView(ctx).also {
-                        previewViewRef = it
+                factory = { previewView },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures { offset ->
+                            val factory = previewView.meteringPointFactory
+                            val point = factory.createPoint(offset.x, offset.y)
+                            val action = FocusMeteringAction.Builder(point).build()
+                            cameraControl?.startFocusAndMetering(action)
+                        }
                     }
-                },
-                modifier = Modifier.fillMaxSize()
             )
+
+            // Rule of Thirds Grid Overlay
+            if (showGridOverlay) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    val gridColor = Color.White.copy(alpha = 0.35f)
+                    val strokeW = 1.5f
+
+                    // Vertical lines
+                    drawLine(gridColor, Offset(w / 3f, 0f), Offset(w / 3f, h), strokeWidth = strokeW)
+                    drawLine(gridColor, Offset(2f * w / 3f, 0f), Offset(2f * w / 3f, h), strokeWidth = strokeW)
+
+                    // Horizontal lines
+                    drawLine(gridColor, Offset(0f, h / 3f), Offset(w, h / 3f), strokeWidth = strokeW)
+                    drawLine(gridColor, Offset(0f, 2f * h / 3f), Offset(w, 2f * h / 3f), strokeWidth = strokeW)
+                }
+            }
 
             // Top Status Overlay
             Row(
@@ -223,19 +289,125 @@ fun ContinuityWebcamScreen(
                         )
                     }
                 }
+
+                // Grid Toggle Button
+                IconButton(
+                    onClick = { showGridOverlay = !showGridOverlay },
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = if (showGridOverlay) Icons.Default.GridOn else Icons.Default.GridOff,
+                        contentDescription = "Toggle Grid",
+                        tint = if (showGridOverlay) Color(0xFF0A84FF) else Color.White
+                    )
+                }
+            }
+
+            // Pro Controls Expandable Deck
+            if (showProControls) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 120.dp, start = 20.dp, end = 20.dp)
+                        .fillMaxWidth(),
+                    color = Color.Black.copy(alpha = 0.85f),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "PRO CAMERA CONTROLS",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        // Zoom Slider
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("Zoom", color = Color.White, fontSize = 12.sp, modifier = Modifier.width(42.dp))
+                            Slider(
+                                value = zoomRatio,
+                                onValueChange = { z ->
+                                    zoomRatio = z
+                                    cameraControl?.setZoomRatio(z)
+                                },
+                                valueRange = 1.0f..8.0f,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = String.format("%.1fx", zoomRatio),
+                                color = Color.Yellow,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.width(40.dp)
+                            )
+                        }
+
+                        // EV Exposure Slider
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("EV", color = Color.White, fontSize = 12.sp, modifier = Modifier.width(42.dp))
+                            Slider(
+                                value = exposureCompensation.toFloat(),
+                                onValueChange = { ev ->
+                                    val evInt = ev.toInt()
+                                    exposureCompensation = evInt
+                                    cameraControl?.setExposureCompensationIndex(evInt)
+                                },
+                                valueRange = -4f..4f,
+                                steps = 7,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = String.format("%+d EV", exposureCompensation),
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                modifier = Modifier.width(44.dp)
+                            )
+                        }
+
+                        // Quick Zoom Preset Buttons
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            listOf(1.0f, 2.0f, 5.0f).forEach { z ->
+                                FilterChip(
+                                    selected = (zoomRatio == z),
+                                    onClick = {
+                                        zoomRatio = z
+                                        cameraControl?.setZoomRatio(z)
+                                    },
+                                    label = { Text(String.format("%.0fx", z)) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        labelColor = Color.White,
+                                        selectedLabelColor = Color.Black,
+                                        selectedContainerColor = Color(0xFF0A84FF)
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // Bottom Control Toolbar
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 48.dp, start = 24.dp, end = 24.dp),
-                color = Color.Black.copy(alpha = 0.7f),
-                shape = RoundedCornerShape(24.dp)
+                    .padding(bottom = 36.dp, start = 20.dp, end = 20.dp),
+                color = Color.Black.copy(alpha = 0.75f),
+                shape = RoundedCornerShape(28.dp)
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(28.dp),
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Torch Toggle
@@ -245,7 +417,8 @@ fun ContinuityWebcamScreen(
                                 isTorchOn = !isTorchOn
                                 cameraControl?.enableTorch(isTorchOn)
                             }
-                        }
+                        },
+                        enabled = !isFrontCamera
                     ) {
                         Icon(
                             imageVector = if (isTorchOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
@@ -265,6 +438,17 @@ fun ContinuityWebcamScreen(
                             imageVector = Icons.Default.Cameraswitch,
                             contentDescription = "Switch Camera",
                             tint = Color.White
+                        )
+                    }
+
+                    // Pro Controls Toggle
+                    IconButton(
+                        onClick = { showProControls = !showProControls }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Pro Camera Controls",
+                            tint = if (showProControls) Color(0xFF0A84FF) else Color.White
                         )
                     }
                 }

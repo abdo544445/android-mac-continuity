@@ -78,7 +78,12 @@ public struct DashboardView: View {
                 }
 
                 // Auto-Discovered Nearby Devices on Local Network
-                if !discovery.discoveredPeers.isEmpty {
+                let nearbyPeers = discovery.discoveredPeers.filter { peer in
+                    // Don't show redundant card if device is already active & connected in top card
+                    !(registry.activeDevice?.deviceId == peer.deviceId && registry.activeDevice?.isConnected == true)
+                }
+
+                if !nearbyPeers.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Label("Nearby Devices on Local Network", systemImage: "dot.radiowaves.left.and.right")
@@ -90,15 +95,27 @@ public struct DashboardView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        ForEach(discovery.discoveredPeers) { peer in
+                        ForEach(nearbyPeers) { peer in
+                            let isPaired = registry.pairedDevices.contains { $0.deviceId == peer.deviceId }
                             HStack(spacing: 14) {
                                 Image(systemName: "ipad.and.iphone")
                                     .font(.system(size: 26))
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(isPaired ? .green : .blue)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(peer.deviceName)
-                                        .font(.system(size: 15, weight: .semibold))
-                                    Text("IP: \(peer.ip) • Ready to Pair")
+                                    HStack(spacing: 6) {
+                                        Text(peer.deviceName)
+                                            .font(.system(size: 15, weight: .semibold))
+                                        if isPaired {
+                                            Text("PAIRED")
+                                                .font(.system(size: 10, weight: .bold))
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.green.opacity(0.2))
+                                                .foregroundColor(.green)
+                                                .cornerRadius(4)
+                                        }
+                                    }
+                                    Text("IP: \(peer.ip) • \(isPaired ? "Ready to Connect" : "New Device")")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
@@ -106,16 +123,17 @@ public struct DashboardView: View {
                                 Button {
                                     agent.initiatePairingWithDiscoveredPeer(peer)
                                 } label: {
-                                    Label("Pair with PIN", systemImage: "checkmark.shield.fill")
+                                    Label(isPaired ? "Connect" : "Pair with PIN", systemImage: isPaired ? "link" : "checkmark.shield.fill")
                                 }
                                 .buttonStyle(.borderedProminent)
+                                .tint(isPaired ? .green : .blue)
                             }
                             .padding(14)
                             .background(Color(NSColor.controlBackgroundColor))
                             .cornerRadius(10)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10)
-                                    .stroke(Color.blue.opacity(0.25), lineWidth: 1)
+                                    .stroke((isPaired ? Color.green : Color.blue).opacity(0.25), lineWidth: 1)
                             )
                         }
                     }

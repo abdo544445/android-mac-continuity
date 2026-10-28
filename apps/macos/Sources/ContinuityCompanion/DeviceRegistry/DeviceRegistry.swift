@@ -110,7 +110,10 @@ public final class DeviceRegistry: ObservableObject {
 
     private func loadDevices() {
         if let data = UserDefaults.standard.data(forKey: storageKey),
-           let devices = try? JSONDecoder().decode([PairedDevice].self, from: data) {
+           var devices = try? JSONDecoder().decode([PairedDevice].self, from: data) {
+            for i in 0..<devices.count {
+                devices[i].isConnected = false
+            }
             self.pairedDevices = devices
             self.activeDevice = devices.first
         }

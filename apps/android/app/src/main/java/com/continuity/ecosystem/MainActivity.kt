@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
     private var isExtendedDisplayActiveState by mutableStateOf(false)
     private var extendedDisplayBitmapState by mutableStateOf<Bitmap?>(null)
     private var isWebcamActiveState by mutableStateOf(false)
+    private var activeCameraControlState by mutableStateOf<CameraControlRequest?>(null)
 
     private var hasAllFilesAccessState by mutableStateOf(false)
     private var hasNotificationListenerState by mutableStateOf(false)
@@ -194,6 +195,24 @@ class MainActivity : ComponentActivity() {
 
         lanDiscoveryManager.onPeersUpdated = { peers ->
             discoveredPeersState = peers
+            val pairedId = pairingManager.getPairedMacId()
+            val pairedName = pairingManager.getPairedMacName()
+            if (!isConnectedState && (!pairedId.isNullOrEmpty() || pairedName.isNotBlank())) {
+                val matchingMac = peers.firstOrNull { 
+                    (!pairedId.isNullOrEmpty() && it.deviceId == pairedId) || 
+                    (pairedName.isNotBlank() && it.deviceName == pairedName) 
+                }
+                if (matchingMac != null) {
+                    pairingManager.savePairedMacInfo(
+                        macId = matchingMac.deviceId,
+                        macName = matchingMac.deviceName,
+                        host = matchingMac.ip,
+                        port = matchingMac.tcpPort,
+                        sessionToken = pairingManager.getPairedMacToken() ?: ""
+                    )
+                    connectionService?.connect(matchingMac.ip, matchingMac.tcpPort)
+                }
+            }
         }
         lanDiscoveryManager.onPairInviteReceived = { peer, pin ->
             startBluetoothStylePairing(peer, customPin = pin)
@@ -327,6 +346,9 @@ class MainActivity : ComponentActivity() {
                 } else if (req.type == SessionType.SESSION_CAMERA_STREAM) {
                     isWebcamActiveState = true
                 }
+            }
+            env.cameraControl?.let { ctrl ->
+                activeCameraControlState = ctrl
             }
             env.sessionStop?.let { stop ->
                 if (isExtendedDisplayActiveState) {
@@ -510,6 +532,7 @@ class MainActivity : ComponentActivity() {
         } else if (isWebcamActiveState) {
             ContinuityWebcamScreen(
                 macName = pairedMacNameState,
+                remoteCameraControl = activeCameraControlState,
                 onClose = { isWebcamActiveState = false }
             )
         } else {

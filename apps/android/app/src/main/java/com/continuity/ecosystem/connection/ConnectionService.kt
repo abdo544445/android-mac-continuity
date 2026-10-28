@@ -6,8 +6,14 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Binder
+import android.os.Build
 import android.os.IBinder
 import android.os.StatFs
 import android.util.Log
@@ -250,7 +256,21 @@ class ConnectionService : Service() {
     private fun startTelemetryJob() {
         telemetryJob?.cancel()
         telemetryJob = scope.launch {
+            // Send initial status immediately upon socket connection
+            try {
+                val initStatus = collectDeviceStatus()
+                sendEnvelope(
+                    ContinuityEnvelope(
+                        senderDeviceId = identity.deviceId,
+                        sessionToken = sessionToken,
+                        deviceStatus = initStatus
+                    )
+                )
+            } catch (_: Exception) {}
+
             while (currentConnectionState && isActive) {
+                delay(8000)
+                if (!currentConnectionState || !isActive) break
                 val status = collectDeviceStatus()
                 val env = ContinuityEnvelope(
                     senderDeviceId = identity.deviceId,
@@ -258,15 +278,32 @@ class ConnectionService : Service() {
                     deviceStatus = status
                 )
                 sendEnvelope(env)
-                delay(15000)
             }
         }
     }
 
     private fun collectDeviceStatus(): DeviceStatus {
-        val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        val batteryPct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-        val isCharging = bm.isCharging
+        var batteryPct = 100
+        var isCharging = false
+        try {
+            val ifilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            val batteryStatus = registerReceiver(null, ifilter)
+            val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+            if (level >= 0 && scale > 0) {
+                batteryPct = (level * 100 / scale.toFloat()).toInt()
+            } else {
+                val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                val prop = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+                if (prop in 0..100) {
+                    batteryPct = prop
+                }
+            }
+            val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+            isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+        } catch (_: Exception) {}
+
+        val wifiSsid = getConnectedWifiSsid()
 
         val stat = StatFs(filesDir.path)
         val freeBytes = stat.availableBlocksLong * stat.blockSizeLong
@@ -276,10 +313,48 @@ class ConnectionService : Service() {
             batteryPercentage = batteryPct,
             isCharging = isCharging,
             isWifiConnected = true,
-            wifiSsid = "Wi-Fi",
+            wifiSsid = wifiSsid,
             freeStorageBytes = freeBytes,
             totalStorageBytes = totalBytes
         )
+    }
+
+    private fun getConnectedWifiSsid(): String {
+        try {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            val wifiInfo = wm?.connectionInfo
+            var ssid = wifiInfo?.ssid
+            if (!ssid.isNullOrEmpty() && ssid != "<unknown ssid>") {
+                if (ssid.startsWith("\"") && ssid.endsWith("\"") && ssid.length >= 2) {
+                    ssid = ssid.substring(1, ssid.length - 1)
+                }
+                if (ssid.isNotEmpty() && ssid != "<unknown ssid>") {
+                    return ssid
+                }
+            }
+        } catch (_: Exception) {}
+
+        try {
+            val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val net = cm?.activeNetwork
+                val caps = cm?.getNetworkCapabilities(net)
+                if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+                    val wifiInfo = caps.transportInfo as? WifiInfo
+                    var ssid = wifiInfo?.ssid
+                    if (!ssid.isNullOrEmpty() && ssid != "<unknown ssid>") {
+                        if (ssid.startsWith("\"") && ssid.endsWith("\"") && ssid.length >= 2) {
+                            ssid = ssid.substring(1, ssid.length - 1)
+                        }
+                        if (ssid.isNotEmpty() && ssid != "<unknown ssid>") {
+                            return ssid
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        return "Wi-Fi"
     }
 
     private fun closeSocketQuietly() {

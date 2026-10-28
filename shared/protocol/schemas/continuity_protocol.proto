@@ -47,6 +47,7 @@ message ContinuityEnvelope {
     SessionStop session_stop = 61;
     SessionState session_state = 62;
     InputEvent input_event = 63;
+    CameraControlRequest camera_control = 64;
 
     // 07: Error & Status
     ErrorResponse error_response = 99;
@@ -287,6 +288,15 @@ message SessionState {
   }
   State state = 2;
   string error_message = 3;
+}
+
+message CameraControlRequest {
+  string lens = 1;                       // "BACK", "FRONT", "ULTRA_WIDE"
+  bool torch = 2;
+  float zoom_ratio = 3;                  // 1.0 to 8.0
+  int32 exposure_compensation = 4;       // -4 to +4
+  string focus_mode = 5;                 // "AUTO", "CONTINUOUS", "MACRO"
+  string white_balance = 6;              // "AUTO", "DAYLIGHT", "INCANDESCENT", "FLUORESCENT", "CLOUDY"
 }
 
 message InputEvent {

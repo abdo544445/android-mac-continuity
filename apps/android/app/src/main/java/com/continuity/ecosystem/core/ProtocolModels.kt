@@ -567,5 +567,22 @@ data class ContinuityEnvelope(
     @SerializedName("storageListRequest", alternate = ["storage_list_request"])
     var storageListRequest: StorageListRequest? = null,
     @SerializedName("storageListResponse", alternate = ["storage_list_response"])
-    var storageListResponse: StorageListResponse? = null
+    var storageListResponse: StorageListResponse? = null,
+    @SerializedName("cameraControl", alternate = ["camera_control"])
+    var cameraControl: CameraControlRequest? = null
+)
+
+data class CameraControlRequest(
+    @SerializedName("lens")
+    val lens: String? = null,
+    @SerializedName("torch")
+    val torch: Boolean? = null,
+    @SerializedName("zoomRatio", alternate = ["zoom_ratio"])
+    val zoomRatio: Float? = null,
+    @SerializedName("exposureCompensation", alternate = ["exposure_compensation"])
+    val exposureCompensation: Int? = null,
+    @SerializedName("focusMode", alternate = ["focus_mode"])
+    val focusMode: String? = null,
+    @SerializedName("whiteBalance", alternate = ["white_balance"])
+    val whiteBalance: String? = null
 )
