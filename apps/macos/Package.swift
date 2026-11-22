@@ -23,14 +23,29 @@ let package = Package(
     dependencies: [],
     targets: [
         .target(
+            name: "CGVirtualDisplayBridge",
+            dependencies: [],
+            path: "Sources/CGVirtualDisplayBridge",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("Foundation")
+            ]
+        ),
+        .target(
             name: "ContinuityProtocol",
             dependencies: [],
             path: "Sources/ContinuityProtocol"
         ),
         .executableTarget(
             name: "ContinuityCompanion",
-            dependencies: ["ContinuityProtocol"],
-            path: "Sources/ContinuityCompanion"
+            dependencies: ["ContinuityProtocol", "CGVirtualDisplayBridge"],
+            path: "Sources/ContinuityCompanion",
+            linkerSettings: [
+                .linkedFramework("ScreenCaptureKit"),
+                .linkedFramework("CoreImage"),
+                .linkedFramework("CoreVideo")
+            ]
         ),
         .executableTarget(
             name: "ContinuityCLI",

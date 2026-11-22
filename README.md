@@ -249,10 +249,11 @@ sequenceDiagram
 
 ## 🌟 Exhaustive Feature Catalog
 
-### 1. Extended Display (Tablet as Secondary Mac Monitor)
-- **Second Screen Expansion**: Turns any Android or Huawei tablet into an ultra-responsive secondary display for your Mac.
-- **Bi-directional Touch & Stylus Control**: Tap, drag, and draw on your tablet; inputs are mapped in real-time to macOS cursor events.
-- **Zero Drivers Required**: Uses native CoreGraphics screen capture on macOS and high-speed binary frame decoding on Android.
+### 1. Extended Display (DeskPad Virtual Monitor + Deskreen Universal Web Display)
+- **Native macOS Virtual Display (DeskPad Engine)**: Creates a real software-defined macOS extended monitor via `CGVirtualDisplay` (no hardware HDMI dummy plug required!), natively recognized in *System Settings → Displays* with selectable resolutions (720p, 1080p, 1200p Tablet, 1440p QHD, 4K UHD) and Retina HiDPI support. Includes an optional floating **DeskPad Preview Window** with active-cursor highlighting and click-to-teleport.
+- **Universal Browser Streaming (Deskreen Engine)**: Embedded local HTTP/MJPEG server turns **any device with a web browser** (iPad, Huawei/Android tablet, Windows PC, Linux, Smart TV) into a wireless secondary screen via QR code — with zero app installs, host Allow/Deny connection approval, Flip Horizontal/Vertical (teleprompter mode), Fit/Fill/Stretch, and live quality switching.
+- **Single App Window Sharing**: Uses Apple's GPU-accelerated `ScreenCaptureKit` to share your Virtual Display, Entire Screen, OR **a single specific macOS Application Window** (e.g., VS Code, Safari, Keynote) to both the Android Continuity app and browser viewers simultaneously.
+- **Bi-directional Touch, Drag & Mouse Control**: Tap, drag, right-click, and scroll on your tablet or browser; inputs map accurately to the exact Quartz global coordinates of the Virtual Display, Physical Screen, or Shared App Window.
 
 ### 2. Universal Control (Shared Mouse & Keyboard)
 - **Seamless Cursor Hopping**: Push your Mac cursor to the edge of the screen to transition into controlling your tablet or phone.

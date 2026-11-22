@@ -26,3 +26,6 @@ dist/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Cloned third-party reference repositories (DeskPad, Deskreen)
+third_party/

@@ -284,7 +284,7 @@ public final class ConnectionAgent: ObservableObject, NetworkSessionDelegate {
             ExtendedDisplayManager.shared.handleRemoteInput(
                 xRatio: input.normalizedX,
                 yRatio: input.normalizedY,
-                isDown: input.action == .down
+                action: input.action
             )
         }
     }
