@@ -41,7 +41,8 @@ public struct ShareableWindowOption: Identifiable, Equatable, Sendable {
 public final class ExtendedDisplayManager: ObservableObject {
     public static let shared = ExtendedDisplayManager()
 
-    public static let EXTENDED_DISPLAY_TRANSFER_ID = "00000000-0000-0000-0000-00EXT_DISPLAY"
+    // Exact 36-byte transfer ID matching FrameEncoder's 36-byte fixed UUID slot
+    public static let EXTENDED_DISPLAY_TRANSFER_ID = "00000000-0000-0000-0000-0EXT_DISPLAY"
 
     @Published public var isStreaming: Bool = false        // True when streaming to Android Continuity App
     @Published public var isCaptureActive: Bool = false    // True whenever SCStream is capturing (Android, Web, or Preview)
@@ -77,6 +78,8 @@ public final class ExtendedDisplayManager: ObservableObject {
     private var scStream: SCStream?
     private var streamOutput: CaptureStreamOutput?
     private var activeAndroidSession: ContinuityNetworkSession?
+    private var isSendingAndroidFrame: Bool = false
+    private var lastAndroidSendStartedAt: Date = .distantPast
     private var sequenceNumber: UInt32 = 0
     private var frameCounterForFps: Int = 0
     private var lastFpsSample = Date()
@@ -193,6 +196,8 @@ public final class ExtendedDisplayManager: ObservableObject {
 
         self.activeAndroidSession = activeSession
         self.isStreaming = true
+        self.isSendingAndroidFrame = false
+        self.lastAndroidSendStartedAt = .distantPast
         self.sequenceNumber = 0
 
         // Notify Android device that extended display session is starting
@@ -220,6 +225,7 @@ public final class ExtendedDisplayManager: ObservableObject {
     public func stopStreaming(session: ContinuityNetworkSession?) {
         guard isStreaming else { return }
         isStreaming = false
+        isSendingAndroidFrame = false
         let activeSession = session ?? activeAndroidSession ?? ConnectionAgent.shared.activeSession
         activeAndroidSession = nil
 
@@ -324,13 +330,18 @@ public final class ExtendedDisplayManager: ObservableObject {
                 captureStatus = "Sharing Window: \(scWindow.owningApplication?.applicationName ?? "App")"
             }
 
+            let maxDimW = AdvancedHostManager.shared.isUsbTunnelActive ? 1600 : 1280
+            let maxDimH = AdvancedHostManager.shared.isUsbTunnelActive ? 1000 : 800
+            let scaled = Self.fitSize(width: targetWidth, height: targetHeight, maxW: maxDimW, maxH: maxDimH)
+
             let config = SCStreamConfiguration()
-            config.width = targetWidth
-            config.height = targetHeight
+            config.width = scaled.width
+            config.height = scaled.height
             config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(10, fps)))
             config.showsCursor = true
+            config.capturesAudio = false
             config.pixelFormat = kCVPixelFormatType_32BGRA
-            config.queueDepth = 3
+            config.queueDepth = 2
 
             let output = CaptureStreamOutput(
                 qualityProvider: { [weak self] in
@@ -358,6 +369,14 @@ public final class ExtendedDisplayManager: ObservableObject {
         }
     }
 
+    private static func fitSize(width: Int, height: Int, maxW: Int, maxH: Int) -> (width: Int, height: Int) {
+        guard width > 0, height > 0 else { return (maxW, maxH) }
+        let ratio = min(1.0, min(Double(maxW) / Double(width), Double(maxH) / Double(height)))
+        let w = max(320, Int((Double(width) * ratio).rounded()) & ~1)
+        let h = max(240, Int((Double(height) * ratio).rounded()) & ~1)
+        return (w, h)
+    }
+
     private func stopCapturePipeline() async {
         if let stream = scStream {
             try? await stream.stopCapture()
@@ -365,6 +384,7 @@ public final class ExtendedDisplayManager: ObservableObject {
         scStream = nil
         streamOutput = nil
         isCaptureActive = false
+        isSendingAndroidFrame = false
         liveFps = 0
         latestPreviewImage = nil
         captureStatus = "Idle"
@@ -390,16 +410,28 @@ public final class ExtendedDisplayManager: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self = self, self.isCaptureActive else { return }
 
-            // 1. Push to Native Android Continuity App if streaming
-            if self.isStreaming, let session = self.activeAndroidSession ?? ConnectionAgent.shared.activeSession {
-                self.sequenceNumber &+= 1
-                let chunk = RawBinaryChunk(
-                    transferId: Self.EXTENDED_DISPLAY_TRANSFER_ID,
-                    chunkIndex: self.sequenceNumber,
-                    chunkTotal: 1,
-                    data: jpegData
-                )
-                session.send(binaryChunk: chunk)
+            // 1. Push to Native Android Continuity App if streaming (always prefer current live session + watchdog-protected backpressure)
+            if self.isStreaming,
+               let session = ConnectionAgent.shared.activeSession ?? self.activeAndroidSession {
+                if self.isSendingAndroidFrame && Date().timeIntervalSince(self.lastAndroidSendStartedAt) > 1.5 {
+                    self.isSendingAndroidFrame = false
+                }
+                if !self.isSendingAndroidFrame {
+                    self.isSendingAndroidFrame = true
+                    self.lastAndroidSendStartedAt = Date()
+                    self.sequenceNumber &+= 1
+                    let chunk = RawBinaryChunk(
+                        transferId: Self.EXTENDED_DISPLAY_TRANSFER_ID,
+                        chunkIndex: self.sequenceNumber,
+                        chunkTotal: 1,
+                        data: jpegData
+                    )
+                    session.send(binaryChunk: chunk) { [weak self] _ in
+                        Task { @MainActor [weak self] in
+                            self?.isSendingAndroidFrame = false
+                        }
+                    }
+                }
             }
 
             // 2. Broadcast to all Deskreen Web Browser Viewers

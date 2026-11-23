@@ -21,10 +21,18 @@ import com.continuity.ecosystem.core.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+
+enum class TransportMode {
+    DISCONNECTED,
+    USB_C,
+    WIFI_LAN
+}
 
 class ConnectionService : Service() {
 
@@ -40,20 +48,30 @@ class ConnectionService : Service() {
     private var outputStream: OutputStream? = null
     private var inputStream: InputStream? = null
     private var telemetryJob: Job? = null
+    private var connectJob: Job? = null
+    private var usbUpgradeJob: Job? = null
 
     private lateinit var identity: DeviceIdentity
     var currentHost: String = "127.0.0.1"
         private set
     var currentPort: Int = 52400
         private set
+    @Volatile
     var currentConnectionState: Boolean = false
         private set
+    @Volatile
+    var transportMode: TransportMode = TransportMode.DISCONNECTED
+        private set
+    @Volatile
+    private var isConnecting: Boolean = false
+    private var lastConnectAttemptMs: Long = 0L
     private var sessionToken: String? = null
     private val writeMutex = Mutex()
 
     val hostControlHandler: HostControlHandler by lazy { HostControlHandler(this) }
 
     var onConnectionStateChanged: ((Boolean) -> Unit)? = null
+    var onTransportModeChanged: ((TransportMode) -> Unit)? = null
     var onEnvelopeReceived: ((ContinuityEnvelope) -> Unit)? = null
     var onBinaryChunkReceived: ((RawBinaryChunk) -> Unit)? = null
 
@@ -74,24 +92,41 @@ class ConnectionService : Service() {
         targetHost: String,
         targetPort: Int,
         initialPairRequest: PairRequest? = null,
+        forceReconnect: Boolean = false,
         onError: ((String) -> Unit)? = null
     ) {
+        val now = System.currentTimeMillis()
+        if (!forceReconnect) {
+            // Never tear down an active USB-C connection or race duplicate LAN discovery triggers
+            if (currentConnectionState && (transportMode == TransportMode.USB_C || (currentHost == targetHost && currentPort == targetPort))) {
+                return
+            }
+            if (isConnecting && (now - lastConnectAttemptMs < 2000L)) {
+                return
+            }
+        }
+
+        isConnecting = true
+        lastConnectAttemptMs = now
         this.currentHost = targetHost
         this.currentPort = targetPort
 
-        scope.launch {
+        connectJob?.cancel()
+        connectJob = scope.launch {
             try {
                 closeSocketQuietly()
                 Log.w("ContinuityDebug", "Connecting to Mac (target=$targetHost:$targetPort, usbTunnel=127.0.0.1:$targetPort)...")
 
                 // Try USB-C ADB Fast-Path (127.0.0.1) FIRST if plugged in via USB cable, then Wi-Fi LAN IP
+                var activeMode = TransportMode.WIFI_LAN
                 val sock = try {
                     Socket().apply {
                         tcpNoDelay = true
                         sendBufferSize = 4 * 1024 * 1024
                         receiveBufferSize = 4 * 1024 * 1024
-                        connect(InetSocketAddress("127.0.0.1", targetPort), 400)
+                        connect(InetSocketAddress("127.0.0.1", targetPort), 300)
                     }.also {
+                        activeMode = TransportMode.USB_C
                         Log.w("ContinuityDebug", "Connected via high-speed USB-C tunnel (127.0.0.1:$targetPort)")
                     }
                 } catch (_: Exception) {
@@ -101,17 +136,28 @@ class ConnectionService : Service() {
                         receiveBufferSize = 4 * 1024 * 1024
                         connect(InetSocketAddress(targetHost, targetPort), 4000)
                     }.also {
+                        activeMode = TransportMode.WIFI_LAN
                         Log.w("ContinuityDebug", "Connected via Wi-Fi LAN ($targetHost:$targetPort)")
                     }
                 }
 
                 socket = sock
-                outputStream = sock.getOutputStream()
-                inputStream = sock.getInputStream()
+                outputStream = BufferedOutputStream(sock.getOutputStream(), 64 * 1024)
+                inputStream = BufferedInputStream(sock.getInputStream(), 256 * 1024)
+                transportMode = activeMode
                 currentConnectionState = true
+                isConnecting = false
 
                 withContext(Dispatchers.Main) {
                     onConnectionStateChanged?.invoke(true)
+                    onTransportModeChanged?.invoke(activeMode)
+                }
+
+                // If currently on Wi-Fi, watch for USB-C cable attachment so frames & controls auto-upgrade to USB
+                if (activeMode == TransportMode.WIFI_LAN) {
+                    startUsbUpgradeMonitor(targetHost, targetPort)
+                } else {
+                    usbUpgradeJob?.cancel()
                 }
 
                 // 1. If pairing was initiated, send PairRequest immediately over the open socket
@@ -144,11 +190,37 @@ class ConnectionService : Service() {
 
                 // 4. Start reading loop
                 readLoop(sock)
+            } catch (e: CancellationException) {
+                isConnecting = false
             } catch (e: Exception) {
+                isConnecting = false
                 Log.e("ConnectionService", "Connection error: ${e.message}", e)
                 handleDisconnect()
                 withContext(Dispatchers.Main) {
                     onError?.invoke(e.localizedMessage ?: "Could not reach Mac at $targetHost:$targetPort")
+                }
+            }
+        }
+    }
+
+    private fun startUsbUpgradeMonitor(fallbackHost: String, targetPort: Int) {
+        usbUpgradeJob?.cancel()
+        usbUpgradeJob = scope.launch {
+            while (currentConnectionState && transportMode == TransportMode.WIFI_LAN && isActive) {
+                delay(3000)
+                if (!currentConnectionState || transportMode == TransportMode.USB_C) break
+                val usbReady = try {
+                    Socket().use { probe ->
+                        probe.connect(InetSocketAddress("127.0.0.1", targetPort), 200)
+                        true
+                    }
+                } catch (_: Exception) {
+                    false
+                }
+                if (usbReady) {
+                    Log.w("ContinuityDebug", "USB-C tunnel detected! Auto-upgrading active session from Wi-Fi to USB-C...")
+                    connect(targetHost = fallbackHost, targetPort = targetPort, forceReconnect = true)
+                    break
                 }
             }
         }
@@ -359,7 +431,9 @@ class ConnectionService : Service() {
 
     private fun closeSocketQuietly() {
         currentConnectionState = false
+        transportMode = TransportMode.DISCONNECTED
         telemetryJob?.cancel()
+        usbUpgradeJob?.cancel()
         try {
             socket?.close()
         } catch (_: Exception) {}
@@ -372,6 +446,7 @@ class ConnectionService : Service() {
         closeSocketQuietly()
         scope.launch(Dispatchers.Main) {
             onConnectionStateChanged?.invoke(false)
+            onTransportModeChanged?.invoke(TransportMode.DISCONNECTED)
         }
     }
 

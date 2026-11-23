@@ -12,6 +12,7 @@ public final class AdvancedHostManager: ObservableObject {
     @Published public var scrcpyPath: String = ""
     @Published public var isMirroringActive: Bool = false
     @Published public var connectedAdbDevices: [String] = []
+    @Published public var isUsbTunnelActive: Bool = false
     @Published public var statusMessage: String = ""
     @Published public var isInstallingDependencies: Bool = false
     @Published public var dependencyInstallMessage: String = ""
@@ -175,11 +176,26 @@ public final class AdvancedHostManager: ObservableObject {
                 }
 
                 let finalDevices = devices
+                let usbSerial = finalDevices.first(where: { !$0.contains(":") && !$0.contains("._tcp") })
+                let tunnelTarget = usbSerial ?? finalDevices.first
+                var tunnelOk = false
+                if let target = tunnelTarget, !target.isEmpty {
+                    for port in [52400, 52410] {
+                        let revProc = Process()
+                        revProc.executableURL = URL(fileURLWithPath: path)
+                        revProc.environment = env
+                        revProc.arguments = ["-s", target, "reverse", "tcp:\(port)", "tcp:\(port)"]
+                        try? revProc.run()
+                        revProc.waitUntilExit()
+                        if port == 52400 && revProc.terminationStatus == 0 {
+                            tunnelOk = true
+                        }
+                    }
+                }
+                let finalTunnelOk = tunnelOk && (usbSerial != nil)
                 await MainActor.run {
                     self.connectedAdbDevices = finalDevices
-                    if !finalDevices.isEmpty {
-                        _ = self.setupAdbReverseTunnel(port: 52400)
-                    }
+                    self.isUsbTunnelActive = finalTunnelOk
                 }
             }
         }
@@ -187,10 +203,10 @@ public final class AdvancedHostManager: ObservableObject {
 
     public func startKeepAliveTimer() {
         keepAliveTimer?.invalidate()
-        keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: true) { [weak self] _ in
+        keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self = self, self.isKeepAliveEnabled, self.isAdbAvailable else { return }
-                if self.connectedAdbDevices.isEmpty {
+                guard let self = self, self.isAdbAvailable else { return }
+                if self.isKeepAliveEnabled && self.connectedAdbDevices.isEmpty {
                     let peerIp = LanDiscoveryService.shared.discoveredPeers.first?.ip
                     if let ip = peerIp, !ip.isEmpty, ip != "127.0.0.1" {
                         await self.connectWirelessAdbIfNeeded(peerIp: ip)
@@ -462,7 +478,8 @@ public final class AdvancedHostManager: ObservableObject {
         process.executableURL = URL(fileURLWithPath: adbPath)
         process.environment = buildProcessEnvironment()
         var args = ["reverse", "tcp:\(port)", "tcp:\(port)"]
-        if let target = connectedAdbDevices.first, !target.isEmpty {
+        let usbTarget = connectedAdbDevices.first(where: { !$0.contains(":") && !$0.contains("._tcp") })
+        if let target = usbTarget ?? connectedAdbDevices.first, !target.isEmpty {
             args = ["-s", target] + args
         }
         process.arguments = args
@@ -574,11 +591,11 @@ public final class AdvancedHostManager: ObservableObject {
 
     public func resolveActiveDevice() -> String? {
         if !connectedAdbDevices.isEmpty {
+            if let usb = connectedAdbDevices.first(where: { !$0.contains(":") && !$0.contains("._tcp") }) {
+                return usb
+            }
             if let ipPort = connectedAdbDevices.first(where: { $0.contains(":") && !$0.contains("._tcp") }) {
                 return ipPort
-            }
-            if let usb = connectedAdbDevices.first(where: { !$0.contains("._tcp") }) {
-                return usb
             }
             return connectedAdbDevices.first
         }
@@ -603,11 +620,11 @@ public final class AdvancedHostManager: ObservableObject {
             }
         }
         self.connectedAdbDevices = list
+        if let usb = list.first(where: { !$0.contains(":") && !$0.contains("._tcp") }) {
+            return usb
+        }
         if let ipPort = list.first(where: { $0.contains(":") && !$0.contains("._tcp") }) {
             return ipPort
-        }
-        if let usb = list.first(where: { !$0.contains("._tcp") }) {
-            return usb
         }
         return list.first
     }

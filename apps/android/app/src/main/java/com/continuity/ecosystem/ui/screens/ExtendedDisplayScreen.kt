@@ -37,6 +37,7 @@ import com.continuity.ecosystem.core.InputEvent
 fun ExtendedDisplayScreen(
     currentFrameBitmap: Bitmap?,
     connectionService: ConnectionService?,
+    isUsbConnected: Boolean = false,
     onExit: () -> Unit
 ) {
     var componentSize by remember { mutableStateOf(IntSize.Zero) }
@@ -90,10 +91,12 @@ fun ExtendedDisplayScreen(
             }
             .pointerInput(touchEnabled, flipHorizontal, fillScreen, currentFrameBitmap?.width, currentFrameBitmap?.height) {
                 var lastDragPos = Offset.Zero
+                var lastMoveSentMs = 0L
                 detectDragGestures(
                     onDragStart = { startOffset ->
                         if (!touchEnabled) return@detectDragGestures
                         lastDragPos = startOffset
+                        lastMoveSentMs = System.currentTimeMillis()
                         val (nx, ny) = mapOffsetToNormalized(startOffset)
                         sendInput(connectionService, InputAction.ACTION_DOWN, nx, ny)
                     },
@@ -101,8 +104,12 @@ fun ExtendedDisplayScreen(
                         if (!touchEnabled) return@detectDragGestures
                         change.consume()
                         lastDragPos = change.position
-                        val (nx, ny) = mapOffsetToNormalized(change.position)
-                        sendInput(connectionService, InputAction.ACTION_MOVE, nx, ny)
+                        val now = System.currentTimeMillis()
+                        if (now - lastMoveSentMs >= 16L) {
+                            lastMoveSentMs = now
+                            val (nx, ny) = mapOffsetToNormalized(change.position)
+                            sendInput(connectionService, InputAction.ACTION_MOVE, nx, ny)
+                        }
                     },
                     onDragEnd = {
                         if (!touchEnabled) return@detectDragGestures
@@ -160,7 +167,7 @@ fun ExtendedDisplayScreen(
                         tint = Color(0xFF60A5FA)
                     )
                     Text(
-                        text = "Mac Display",
+                        text = if (isUsbConnected) "Mac Display · USB-C ⚡" else "Mac Display · Wi-Fi",
                         color = Color.White,
                         style = MaterialTheme.typography.labelLarge
                     )

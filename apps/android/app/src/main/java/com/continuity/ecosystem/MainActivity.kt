@@ -33,6 +33,7 @@ import com.continuity.ecosystem.clipboard.ClipboardSyncManager
 import com.continuity.ecosystem.connection.ConnectionService
 import com.continuity.ecosystem.connection.DiscoveredPeer
 import com.continuity.ecosystem.connection.LanDiscoveryManager
+import com.continuity.ecosystem.connection.TransportMode
 import com.continuity.ecosystem.core.*
 import com.continuity.ecosystem.files.AndroidTransferItem
 import com.continuity.ecosystem.files.FileTransferManager
@@ -77,6 +78,7 @@ class MainActivity : ComponentActivity() {
 
     // Observable Compose UI states bound across service lifecycle
     private var isConnectedState by mutableStateOf(false)
+    private var transportModeState by mutableStateOf(TransportMode.DISCONNECTED)
     private var pairedMacNameState by mutableStateOf("")
     private var transfersListState by mutableStateOf<List<AndroidTransferItem>>(emptyList())
     private var discoveredPeersState by mutableStateOf<List<DiscoveredPeer>>(emptyList())
@@ -84,6 +86,9 @@ class MainActivity : ComponentActivity() {
 
     private var isExtendedDisplayActiveState by mutableStateOf(false)
     private var extendedDisplayBitmapState by mutableStateOf<Bitmap?>(null)
+    private val pendingExtDisplayFrame = java.util.concurrent.atomic.AtomicReference<ByteArray?>(null)
+    private val isDecodingExtDisplay = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val extDisplayDecodeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var isWebcamActiveState by mutableStateOf(false)
     private var activeCameraControlState by mutableStateOf<CameraControlRequest?>(null)
 
@@ -247,14 +252,65 @@ class MainActivity : ComponentActivity() {
 
         service.onConnectionStateChanged = { connected ->
             isConnectedState = connected
+            if (!connected) {
+                transportModeState = TransportMode.DISCONNECTED
+            } else {
+                transportModeState = service.transportMode
+            }
+        }
+        service.onTransportModeChanged = { mode ->
+            transportModeState = mode
         }
         service.onBinaryChunkReceived = { chunk ->
-            if (chunk.transferId == "00000000-0000-0000-0000-00EXT_DISPLAY") {
-                val bmp = BitmapFactory.decodeByteArray(chunk.data, 0, chunk.data.size)
-                if (bmp != null) {
-                    extendedDisplayBitmapState = bmp
-                    if (!isExtendedDisplayActiveState) {
-                        isExtendedDisplayActiveState = true
+            val isExtDisplayChunk =
+                chunk.transferId == "00000000-0000-0000-0000-0EXT_DISPLAY" ||
+                chunk.transferId == "00000000-0000-0000-0000-00EXT_DISPLA" ||
+                chunk.transferId == "00000000-0000-0000-0000-00EXT_DISPLAY"
+            if (isExtDisplayChunk) {
+                // Conflated latest-frame-only decode so socket readLoop never blocks
+                pendingExtDisplayFrame.set(chunk.data)
+                if (isDecodingExtDisplay.compareAndSet(false, true)) {
+                    extDisplayDecodeExecutor.execute {
+                        try {
+                            while (true) {
+                                val frameData = pendingExtDisplayFrame.getAndSet(null) ?: break
+                                val opts = BitmapFactory.Options().apply {
+                                    inPreferredConfig = Bitmap.Config.RGB_565
+                                }
+                                val bmp = BitmapFactory.decodeByteArray(frameData, 0, frameData.size, opts)
+                                if (bmp != null) {
+                                    runOnUiThread {
+                                        extendedDisplayBitmapState = bmp
+                                        if (!isExtendedDisplayActiveState) {
+                                            isExtendedDisplayActiveState = true
+                                        }
+                                    }
+                                }
+                            }
+                        } finally {
+                            isDecodingExtDisplay.set(false)
+                            // Re-check if another frame arrived right before releasing the flag
+                            if (pendingExtDisplayFrame.get() != null && isDecodingExtDisplay.compareAndSet(false, true)) {
+                                extDisplayDecodeExecutor.execute {
+                                    try {
+                                        val frameData = pendingExtDisplayFrame.getAndSet(null)
+                                        if (frameData != null) {
+                                            val opts = BitmapFactory.Options().apply {
+                                                inPreferredConfig = Bitmap.Config.RGB_565
+                                            }
+                                            val bmp = BitmapFactory.decodeByteArray(frameData, 0, frameData.size, opts)
+                                            if (bmp != null) {
+                                                runOnUiThread {
+                                                    extendedDisplayBitmapState = bmp
+                                                }
+                                            }
+                                        }
+                                    } finally {
+                                        isDecodingExtDisplay.set(false)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             } else {
@@ -518,6 +574,7 @@ class MainActivity : ComponentActivity() {
             ExtendedDisplayScreen(
                 currentFrameBitmap = extendedDisplayBitmapState,
                 connectionService = connectionService,
+                isUsbConnected = (transportModeState == TransportMode.USB_C),
                 onExit = {
                     isExtendedDisplayActiveState = false
                     extendedDisplayBitmapState = null
