@@ -43,6 +43,8 @@ let package = Package(
             path: "Sources/ContinuityCompanion",
             linkerSettings: [
                 .linkedFramework("ScreenCaptureKit"),
+                .linkedFramework("VideoToolbox"),
+                .linkedFramework("CoreMedia"),
                 .linkedFramework("CoreImage"),
                 .linkedFramework("CoreVideo")
             ]

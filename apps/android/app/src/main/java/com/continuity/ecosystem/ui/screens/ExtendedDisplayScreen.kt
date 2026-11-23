@@ -1,6 +1,8 @@
 package com.continuity.ecosystem.ui.screens
 
 import android.graphics.Bitmap
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -21,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -28,14 +31,20 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.continuity.ecosystem.connection.ConnectionService
 import com.continuity.ecosystem.core.ContinuityEnvelope
 import com.continuity.ecosystem.core.InputAction
 import com.continuity.ecosystem.core.InputEvent
+import com.continuity.ecosystem.display.H264SurfaceDecoder
 
 @Composable
 fun ExtendedDisplayScreen(
     currentFrameBitmap: Bitmap?,
+    isH264Mode: Boolean = false,
+    h264Decoder: H264SurfaceDecoder? = null,
+    h264VideoWidth: Int = 1920,
+    h264VideoHeight: Int = 1080,
     connectionService: ConnectionService?,
     isUsbConnected: Boolean = false,
     onExit: () -> Unit
@@ -46,18 +55,20 @@ fun ExtendedDisplayScreen(
     var touchEnabled by remember { mutableStateOf(true) }
     var showHud by remember { mutableStateOf(true) }
 
+    val activeW = if (isH264Mode) h264VideoWidth else (currentFrameBitmap?.width ?: 1920)
+    val activeH = if (isH264Mode) h264VideoHeight else (currentFrameBitmap?.height ?: 1080)
+
     fun mapOffsetToNormalized(offset: Offset): Pair<Float, Float> {
         val boxW = componentSize.width.toFloat().coerceAtLeast(1f)
         val boxH = componentSize.height.toFloat().coerceAtLeast(1f)
-        val bmp = currentFrameBitmap
 
         var renderW = boxW
         var renderH = boxH
         var offX = 0f
         var offY = 0f
 
-        if (!fillScreen && bmp != null && bmp.width > 0 && bmp.height > 0) {
-            val imgAspect = bmp.width.toFloat() / bmp.height.toFloat()
+        if (!fillScreen && activeW > 0 && activeH > 0) {
+            val imgAspect = activeW.toFloat() / activeH.toFloat()
             val boxAspect = boxW / boxH
             if (imgAspect > boxAspect) {
                 renderH = boxW / imgAspect
@@ -81,7 +92,7 @@ fun ExtendedDisplayScreen(
             .fillMaxSize()
             .background(Color.Black)
             .onSizeChanged { componentSize = it }
-            .pointerInput(touchEnabled, flipHorizontal, fillScreen, currentFrameBitmap?.width, currentFrameBitmap?.height) {
+            .pointerInput(touchEnabled, flipHorizontal, fillScreen, activeW, activeH) {
                 detectTapGestures { offset ->
                     if (!touchEnabled) return@detectTapGestures
                     val (nx, ny) = mapOffsetToNormalized(offset)
@@ -89,7 +100,7 @@ fun ExtendedDisplayScreen(
                     sendInput(connectionService, InputAction.ACTION_UP, nx, ny)
                 }
             }
-            .pointerInput(touchEnabled, flipHorizontal, fillScreen, currentFrameBitmap?.width, currentFrameBitmap?.height) {
+            .pointerInput(touchEnabled, flipHorizontal, fillScreen, activeW, activeH) {
                 var lastDragPos = Offset.Zero
                 var lastMoveSentMs = 0L
                 detectDragGestures(
@@ -124,7 +135,42 @@ fun ExtendedDisplayScreen(
                 )
             }
     ) {
-        if (currentFrameBitmap != null) {
+        if (isH264Mode && h264Decoder != null) {
+            val aspectRatio = (activeW.toFloat() / activeH.coerceAtLeast(1).toFloat()).coerceIn(0.5f, 3.5f)
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        SurfaceView(ctx).apply {
+                            holder.addCallback(object : SurfaceHolder.Callback {
+                                override fun surfaceCreated(holder: SurfaceHolder) {
+                                    h264Decoder.attachSurface(holder.surface)
+                                }
+
+                                override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                                    h264Decoder.attachSurface(holder.surface)
+                                }
+
+                                override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                    h264Decoder.attachSurface(null)
+                                }
+                            })
+                        }
+                    },
+                    modifier = if (fillScreen) {
+                        Modifier.fillMaxSize()
+                    } else {
+                        Modifier
+                            .fillMaxSize()
+                            .aspectRatio(aspectRatio, matchHeightConstraintsFirst = false)
+                    }.graphicsLayer {
+                        scaleX = if (flipHorizontal) -1f else 1f
+                    }
+                )
+            }
+        } else if (currentFrameBitmap != null) {
             Image(
                 bitmap = currentFrameBitmap.asImageBitmap(),
                 contentDescription = "Mac Extended Display Stream",
@@ -133,7 +179,8 @@ fun ExtendedDisplayScreen(
                     .graphicsLayer {
                         scaleX = if (flipHorizontal) -1f else 1f
                     },
-                contentScale = if (fillScreen) ContentScale.Crop else ContentScale.Fit
+                contentScale = if (fillScreen) ContentScale.Crop else ContentScale.Fit,
+                filterQuality = FilterQuality.High
             )
         } else {
             Column(
@@ -167,7 +214,10 @@ fun ExtendedDisplayScreen(
                         tint = Color(0xFF60A5FA)
                     )
                     Text(
-                        text = if (isUsbConnected) "Mac Display · USB-C ⚡" else "Mac Display · Wi-Fi",
+                        text = buildString {
+                            append(if (isUsbConnected) "USB-C ⚡" else "Wi-Fi")
+                            append(if (isH264Mode) " · H.264" else " · HD")
+                        },
                         color = Color.White,
                         style = MaterialTheme.typography.labelLarge
                     )

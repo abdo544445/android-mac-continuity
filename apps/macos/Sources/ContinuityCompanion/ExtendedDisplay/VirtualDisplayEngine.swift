@@ -10,6 +10,7 @@ public enum VirtualDisplayPreset: String, CaseIterable, Identifiable, Sendable {
     case macbook900 = "1440×900 (16:10)"
     case fhd1080 = "1920×1080 (Full HD 16:9)"
     case tablet1200 = "1920×1200 (Tablet 16:10)"
+    case tabletNative = "2456×1600 (Huawei Tablet Native)"
     case qhd1440 = "2560×1440 (QHD 16:9)"
     case retina1600 = "2560×1600 (Retina 16:10)"
     case uhd4k = "3840×2160 (4K UHD)"
@@ -23,6 +24,7 @@ public enum VirtualDisplayPreset: String, CaseIterable, Identifiable, Sendable {
         case .macbook900: return 1440
         case .fhd1080: return 1920
         case .tablet1200: return 1920
+        case .tabletNative: return 2456
         case .qhd1440: return 2560
         case .retina1600: return 2560
         case .uhd4k: return 3840
@@ -36,6 +38,7 @@ public enum VirtualDisplayPreset: String, CaseIterable, Identifiable, Sendable {
         case .macbook900: return 900
         case .fhd1080: return 1080
         case .tablet1200: return 1200
+        case .tabletNative: return 1600
         case .qhd1440: return 1440
         case .retina1600: return 1600
         case .uhd4k: return 2160

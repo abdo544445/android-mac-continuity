@@ -35,6 +35,7 @@ import com.continuity.ecosystem.connection.DiscoveredPeer
 import com.continuity.ecosystem.connection.LanDiscoveryManager
 import com.continuity.ecosystem.connection.TransportMode
 import com.continuity.ecosystem.core.*
+import com.continuity.ecosystem.display.H264SurfaceDecoder
 import com.continuity.ecosystem.files.AndroidTransferItem
 import com.continuity.ecosystem.files.FileTransferManager
 import com.continuity.ecosystem.handoff.HandoffManager
@@ -85,6 +86,9 @@ class MainActivity : ComponentActivity() {
     private var pendingPinConfirmState by mutableStateOf<Pair<DiscoveredPeer, String>?>(null)
 
     private var isExtendedDisplayActiveState by mutableStateOf(false)
+    private var isH264StreamActiveState by mutableStateOf(false)
+    private var h264VideoSizeState by mutableStateOf(Pair(1920, 1080))
+    private val h264Decoder = H264SurfaceDecoder()
     private var extendedDisplayBitmapState by mutableStateOf<Bitmap?>(null)
     private val pendingExtDisplayFrame = java.util.concurrent.atomic.AtomicReference<ByteArray?>(null)
     private val isDecodingExtDisplay = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -262,11 +266,25 @@ class MainActivity : ComponentActivity() {
             transportModeState = mode
         }
         service.onBinaryChunkReceived = { chunk ->
+            val isH264Chunk = (chunk.transferId == "00000000-0000-0000-0000-00000000H264")
             val isExtDisplayChunk =
                 chunk.transferId == "00000000-0000-0000-0000-0EXT_DISPLAY" ||
                 chunk.transferId == "00000000-0000-0000-0000-00EXT_DISPLA" ||
                 chunk.transferId == "00000000-0000-0000-0000-00EXT_DISPLAY"
-            if (isExtDisplayChunk) {
+            if (isH264Chunk) {
+                h264Decoder.onVideoSizeChanged = { w, h ->
+                    runOnUiThread {
+                        h264VideoSizeState = Pair(w, h)
+                    }
+                }
+                if (!isExtendedDisplayActiveState || !isH264StreamActiveState) {
+                    runOnUiThread {
+                        isH264StreamActiveState = true
+                        isExtendedDisplayActiveState = true
+                    }
+                }
+                h264Decoder.submitFrame(chunk.data, isKeyframeHint = (chunk.chunkTotal == 1))
+            } else if (isExtDisplayChunk) {
                 // Conflated latest-frame-only decode so socket readLoop never blocks
                 pendingExtDisplayFrame.set(chunk.data)
                 if (isDecodingExtDisplay.compareAndSet(false, true)) {
@@ -275,7 +293,8 @@ class MainActivity : ComponentActivity() {
                             while (true) {
                                 val frameData = pendingExtDisplayFrame.getAndSet(null) ?: break
                                 val opts = BitmapFactory.Options().apply {
-                                    inPreferredConfig = Bitmap.Config.RGB_565
+                                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                                    inPreferQualityOverSpeed = true
                                 }
                                 val bmp = BitmapFactory.decodeByteArray(frameData, 0, frameData.size, opts)
                                 if (bmp != null) {
@@ -296,7 +315,8 @@ class MainActivity : ComponentActivity() {
                                         val frameData = pendingExtDisplayFrame.getAndSet(null)
                                         if (frameData != null) {
                                             val opts = BitmapFactory.Options().apply {
-                                                inPreferredConfig = Bitmap.Config.RGB_565
+                                                inPreferredConfig = Bitmap.Config.ARGB_8888
+                                                inPreferQualityOverSpeed = true
                                             }
                                             val bmp = BitmapFactory.decodeByteArray(frameData, 0, frameData.size, opts)
                                             if (bmp != null) {
@@ -573,11 +593,17 @@ class MainActivity : ComponentActivity() {
         if (isExtendedDisplayActiveState) {
             ExtendedDisplayScreen(
                 currentFrameBitmap = extendedDisplayBitmapState,
+                isH264Mode = isH264StreamActiveState,
+                h264Decoder = h264Decoder,
+                h264VideoWidth = h264VideoSizeState.first,
+                h264VideoHeight = h264VideoSizeState.second,
                 connectionService = connectionService,
                 isUsbConnected = (transportModeState == TransportMode.USB_C),
                 onExit = {
                     isExtendedDisplayActiveState = false
+                    isH264StreamActiveState = false
                     extendedDisplayBitmapState = null
+                    h264Decoder.release()
                     connectionService?.sendEnvelope(
                         ContinuityEnvelope(
                             senderDeviceId = identity.deviceId,

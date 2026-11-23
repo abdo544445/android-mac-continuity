@@ -280,13 +280,17 @@ public struct ExtendedDisplayHostView: View {
                     Slider(value: Binding(
                         get: { extManager.quality },
                         set: { extManager.setQuality($0) }
-                    ), in: 0.4...0.95, step: 0.05)
+                    ), in: 0.4...0.98, step: 0.02)
                     .frame(width: 150)
                     Text("\(Int(extManager.quality * 100))%")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundColor(.secondary)
                         .frame(width: 38)
                 }
+
+                Toggle("Hardware H.264", isOn: $extManager.useHardwareH264)
+                    .toggleStyle(.switch)
+                    .help("Uses Apple VideoToolbox hardware H.264 + Android MediaCodec for crisp 60 FPS Display P3 streaming")
 
                 Spacer()
             }

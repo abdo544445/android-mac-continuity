@@ -41,13 +41,15 @@ public struct ShareableWindowOption: Identifiable, Equatable, Sendable {
 public final class ExtendedDisplayManager: ObservableObject {
     public static let shared = ExtendedDisplayManager()
 
-    // Exact 36-byte transfer ID matching FrameEncoder's 36-byte fixed UUID slot
+    // Exact 36-byte transfer IDs matching FrameEncoder's 36-byte fixed UUID slot
     public static let EXTENDED_DISPLAY_TRANSFER_ID = "00000000-0000-0000-0000-0EXT_DISPLAY"
+    public static let EXTENDED_DISPLAY_H264_ID     = "00000000-0000-0000-0000-00000000H264"
 
     @Published public var isStreaming: Bool = false        // True when streaming to Android Continuity App
     @Published public var isCaptureActive: Bool = false    // True whenever SCStream is capturing (Android, Web, or Preview)
-    @Published public var fps: Int = 30
-    @Published public var quality: Float = 0.75
+    @Published public var useHardwareH264: Bool = true     // Hardware VideoToolbox H.264 stream to Android
+    @Published public var fps: Int = 60
+    @Published public var quality: Float = 0.90
     @Published public var liveFps: Double = 0.0
     @Published public var captureStatus: String = "Idle"
     @Published public var sourceMode: DisplaySourceMode = .virtualDisplay
@@ -77,6 +79,7 @@ public final class ExtendedDisplayManager: ObservableObject {
 
     private var scStream: SCStream?
     private var streamOutput: CaptureStreamOutput?
+    private var h264Encoder: H264HardwareEncoder?
     private var activeAndroidSession: ContinuityNetworkSession?
     private var isSendingAndroidFrame: Bool = false
     private var lastAndroidSendStartedAt: Date = .distantPast
@@ -199,6 +202,8 @@ public final class ExtendedDisplayManager: ObservableObject {
         self.isSendingAndroidFrame = false
         self.lastAndroidSendStartedAt = .distantPast
         self.sequenceNumber = 0
+        self.syncCaptureFlags()
+        self.h264Encoder?.requestKeyframe()
 
         // Notify Android device that extended display session is starting
         var req = ContinuityEnvelope(senderDeviceId: "macos-companion")
@@ -284,20 +289,24 @@ public final class ExtendedDisplayManager: ObservableObject {
             let targetWidth: Int
             let targetHeight: Int
 
+            let isUsb = AdvancedHostManager.shared.isUsbTunnelActive
+            let maxDimW = isUsb ? 2560 : 1440
+            let maxDimH = isUsb ? 1600 : 900
+
             switch sourceMode {
             case .virtualDisplay:
                 let vdID = VirtualDisplayEngine.shared.displayID
                 if vdID != kCGNullDirectDisplay,
                    let scDisplay = content.displays.first(where: { $0.displayID == vdID }) {
                     filter = SCContentFilter(display: scDisplay, excludingWindows: [])
-                    targetWidth = min(scDisplay.width, 1920)
-                    targetHeight = min(scDisplay.height, 1200)
+                    targetWidth = min(scDisplay.width, maxDimW)
+                    targetHeight = min(scDisplay.height, maxDimH)
                     activeTargetBounds = CGDisplayBounds(vdID)
                     captureStatus = "Capturing DeskPad Virtual Display (\(scDisplay.width)×\(scDisplay.height))"
                 } else if let fallback = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first {
                     filter = SCContentFilter(display: fallback, excludingWindows: [])
-                    targetWidth = min(fallback.width, 1920)
-                    targetHeight = min(fallback.height, 1080)
+                    targetWidth = min(fallback.width, maxDimW)
+                    targetHeight = min(fallback.height, maxDimH)
                     activeTargetBounds = CGDisplayBounds(fallback.displayID)
                     captureStatus = "Fallback: Capturing Main Display"
                 } else {
@@ -312,8 +321,8 @@ public final class ExtendedDisplayManager: ObservableObject {
                     return
                 }
                 filter = SCContentFilter(display: scDisplay, excludingWindows: [])
-                targetWidth = min(scDisplay.width, 1920)
-                targetHeight = min(scDisplay.height, 1200)
+                targetWidth = min(scDisplay.width, maxDimW)
+                targetHeight = min(scDisplay.height, maxDimH)
                 activeTargetBounds = CGDisplayBounds(scDisplay.displayID)
                 captureStatus = "Capturing Display (\(scDisplay.width)×\(scDisplay.height))"
 
@@ -324,14 +333,12 @@ public final class ExtendedDisplayManager: ObservableObject {
                     return
                 }
                 filter = SCContentFilter(desktopIndependentWindow: scWindow)
-                targetWidth = max(320, min(Int(scWindow.frame.width), 1920))
-                targetHeight = max(240, min(Int(scWindow.frame.height), 1200))
+                targetWidth = max(320, min(Int(scWindow.frame.width), maxDimW))
+                targetHeight = max(240, min(Int(scWindow.frame.height), maxDimH))
                 activeTargetBounds = scWindow.frame
                 captureStatus = "Sharing Window: \(scWindow.owningApplication?.applicationName ?? "App")"
             }
 
-            let maxDimW = AdvancedHostManager.shared.isUsbTunnelActive ? 1600 : 1280
-            let maxDimH = AdvancedHostManager.shared.isUsbTunnelActive ? 1000 : 800
             let scaled = Self.fitSize(width: targetWidth, height: targetHeight, maxW: maxDimW, maxH: maxDimH)
 
             let config = SCStreamConfiguration()
@@ -341,11 +348,29 @@ public final class ExtendedDisplayManager: ObservableObject {
             config.showsCursor = true
             config.capturesAudio = false
             config.pixelFormat = kCVPixelFormatType_32BGRA
+            config.colorSpaceName = CGColorSpace.displayP3
             config.queueDepth = 2
+
+            let h264Bitrate = isUsb ? 24_000_000 : 10_000_000
+            let encoder = H264HardwareEncoder(
+                width: scaled.width,
+                height: scaled.height,
+                fps: fps,
+                bitrateBps: h264Bitrate
+            ) { [weak self] annexBData, isKeyframe in
+                self?.dispatchEncodedH264Frame(annexBData, isKeyframe: isKeyframe)
+            }
+            self.h264Encoder = encoder
 
             let output = CaptureStreamOutput(
                 qualityProvider: { [weak self] in
-                    self?.currentQualityValue ?? 0.75
+                    self?.currentQualityValue ?? 0.90
+                },
+                needsJpegProvider: { [weak self] in
+                    self?.shouldEncodeJpegFrames ?? true
+                },
+                h264Encoder: { [weak self] in
+                    self?.shouldEncodeH264Frames == true ? encoder : nil
                 },
                 onFrameEncoded: { [weak self] jpegData in
                     self?.dispatchEncodedFrame(jpegData)
@@ -359,6 +384,7 @@ public final class ExtendedDisplayManager: ObservableObject {
             self.streamOutput = output
             self.scStream = stream
             self.isCaptureActive = true
+            self.syncCaptureFlags()
             self.frameCounterForFps = 0
             self.lastFpsSample = Date()
             ConnectionAgent.shared.debugLog("ScreenCaptureKit stream started: \(captureStatus) @ \(fps) FPS")
@@ -383,6 +409,8 @@ public final class ExtendedDisplayManager: ObservableObject {
         }
         scStream = nil
         streamOutput = nil
+        h264Encoder?.invalidate()
+        h264Encoder = nil
         isCaptureActive = false
         isSendingAndroidFrame = false
         liveFps = 0
@@ -397,7 +425,7 @@ public final class ExtendedDisplayManager: ObservableObject {
         return _atomicQuality
     }
     private let qualityLock = NSLock()
-    private nonisolated(unsafe) var _atomicQuality: Float = 0.75
+    private nonisolated(unsafe) var _atomicQuality: Float = 0.90
 
     public func setQuality(_ newValue: Float) {
         self.quality = newValue
@@ -406,12 +434,64 @@ public final class ExtendedDisplayManager: ObservableObject {
         qualityLock.unlock()
     }
 
+    private nonisolated var shouldEncodeJpegFrames: Bool {
+        flagsLock.lock()
+        defer { flagsLock.unlock() }
+        return _needJpeg
+    }
+    private nonisolated var shouldEncodeH264Frames: Bool {
+        flagsLock.lock()
+        defer { flagsLock.unlock() }
+        return _needH264
+    }
+    private let flagsLock = NSLock()
+    private nonisolated(unsafe) var _needJpeg: Bool = true
+    private nonisolated(unsafe) var _needH264: Bool = true
+
+    private func syncCaptureFlags() {
+        let needH264 = isStreaming && useHardwareH264
+        let needJpeg = (isStreaming && !useHardwareH264) || DeskreenWebHost.shared.isRunning || VirtualDisplayEngine.shared.isPreviewWindowOpen
+        flagsLock.lock()
+        _needH264 = needH264
+        _needJpeg = needJpeg
+        flagsLock.unlock()
+    }
+
+    private nonisolated func dispatchEncodedH264Frame(_ annexBData: Data, isKeyframe: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self = self, self.isCaptureActive else { return }
+            self.syncCaptureFlags()
+            guard self.isStreaming, self.useHardwareH264,
+                  let session = ConnectionAgent.shared.activeSession ?? self.activeAndroidSession else { return }
+
+            self.sequenceNumber &+= 1
+            let chunk = RawBinaryChunk(
+                transferId: Self.EXTENDED_DISPLAY_H264_ID,
+                chunkIndex: self.sequenceNumber,
+                chunkTotal: isKeyframe ? 1 : 0,
+                data: annexBData
+            )
+            session.send(binaryChunk: chunk)
+
+            self.frameCounterForFps += 1
+            let now = Date()
+            let elapsed = now.timeIntervalSince(self.lastFpsSample)
+            if elapsed >= 1.0 {
+                self.liveFps = Double(self.frameCounterForFps) / elapsed
+                self.frameCounterForFps = 0
+                self.lastFpsSample = now
+            }
+        }
+    }
+
     private nonisolated func dispatchEncodedFrame(_ jpegData: Data) {
         Task { @MainActor [weak self] in
             guard let self = self, self.isCaptureActive else { return }
+            self.syncCaptureFlags()
 
-            // 1. Push to Native Android Continuity App if streaming (always prefer current live session + watchdog-protected backpressure)
+            // 1. Push JPEG to Native Android Continuity App only when H.264 mode is off
             if self.isStreaming,
+               !self.useHardwareH264,
                let session = ConnectionAgent.shared.activeSession ?? self.activeAndroidSession {
                 if self.isSendingAndroidFrame && Date().timeIntervalSince(self.lastAndroidSendStartedAt) > 1.5 {
                     self.isSendingAndroidFrame = false
@@ -524,16 +604,25 @@ public final class ExtendedDisplayManager: ObservableObject {
     }
 }
 
-/// Hardware-accelerated ScreenCaptureKit sample output encoder using GPU CIContext JPEG compression.
+/// Hardware-accelerated ScreenCaptureKit sample output feeding VideoToolbox H.264 (for Android) and Display-P3 JPEG (for Deskreen Web).
 private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     let processingQueue = DispatchQueue(label: "com.continuity.screencapture.encode", qos: .userInteractive)
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
-    private let colorSpace = CGColorSpaceCreateDeviceRGB()
+    private let colorSpace = CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpaceCreateDeviceRGB()
     private let qualityProvider: () -> Float
+    private let needsJpegProvider: () -> Bool
+    private let h264Encoder: () -> H264HardwareEncoder?
     private let onFrameEncoded: (Data) -> Void
 
-    init(qualityProvider: @escaping () -> Float, onFrameEncoded: @escaping (Data) -> Void) {
+    init(
+        qualityProvider: @escaping () -> Float,
+        needsJpegProvider: @escaping () -> Bool,
+        h264Encoder: @escaping () -> H264HardwareEncoder?,
+        onFrameEncoded: @escaping (Data) -> Void
+    ) {
         self.qualityProvider = qualityProvider
+        self.needsJpegProvider = needsJpegProvider
+        self.h264Encoder = h264Encoder
         self.onFrameEncoded = onFrameEncoded
     }
 
@@ -544,13 +633,20 @@ private final class CaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Se
             return
         }
 
-        let ciImage = CIImage(cvImageBuffer: imageBuffer)
-        let quality = max(0.35, min(0.95, qualityProvider()))
-        let options: [CIImageRepresentationOption: Any] = [
-            kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: quality
-        ]
-        if let jpegData = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: options) {
-            onFrameEncoded(jpegData)
+        if let encoder = h264Encoder() {
+            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            encoder.encode(pixelBuffer: imageBuffer, presentationTime: pts)
+        }
+
+        if needsJpegProvider() {
+            let ciImage = CIImage(cvImageBuffer: imageBuffer)
+            let quality = max(0.35, min(0.98, qualityProvider()))
+            let options: [CIImageRepresentationOption: Any] = [
+                kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: quality
+            ]
+            if let jpegData = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: options) {
+                onFrameEncoded(jpegData)
+            }
         }
     }
 }
